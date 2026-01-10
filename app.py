@@ -2,21 +2,15 @@
 UAE Promo Pulse - Main Dashboard
 ================================
 Streamlit dashboard with Executive and Manager views.
-Includes all 12 required chart types.
+Includes all 12 required chart types + Data Upload Option.
 
-Chart Types Included:
-1. Scatter plot - Demand vs Stock, Outlier Detection
-2. Historical prediction chart - Revenue forecast
-3. Dual axis chart - Issues Pareto, Growth with Target
-4. Outlier detection plot - Price/Qty anomalies
-5. Waterfall chart - Revenue breakdown
-6. Comparison matrix - Channel vs Category heatmap
-7. Margin profitability - Enhanced margin analysis
-8. Donut chart - Revenue by City
-9. Growth trends - Week-over-week growth
-10. Cumulative performance tracker - Running totals
-11. Performance matrix - KPI heatmap
-12. What-if heatmap - Discount vs Category simulation
+Features:
+- Generate Sample Data OR Upload Your Own CSV Files
+- 5+ Sidebar Filters
+- 15 KPIs with full visualization
+- 12 Chart Types
+- What-If Simulation
+- Download cleaned data and issues log
 """
 
 import streamlit as st
@@ -165,9 +159,13 @@ st.markdown("""
     .constraint-card-error {
         background: #f8d7da; border-left: 4px solid #dc3545;
     }
-    .chart-container {
-        background: white; border-radius: 10px; padding: 1rem;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.05); margin-bottom: 1rem;
+    .upload-box {
+        background: #f8f9fa; border: 2px dashed #dee2e6; border-radius: 10px;
+        padding: 1rem; margin: 0.5rem 0; text-align: center;
+    }
+    .upload-success {
+        background: #d4edda; border: 2px solid #28a745; border-radius: 10px;
+        padding: 0.5rem 1rem; margin: 0.3rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -211,6 +209,108 @@ def safe_get_filter(filters, key, default=None):
     if val == 'All' or val is None:
         return None
     return val
+
+
+def validate_uploaded_data(products_df, stores_df, sales_df, inventory_df):
+    """Validate uploaded CSV files have required columns"""
+    errors = []
+    warnings = []
+    
+    # Required columns for each file
+    required_cols = {
+        'products': ['product_id', 'category', 'base_price_aed'],
+        'stores': ['store_id', 'city', 'channel'],
+        'sales': ['order_id', 'order_time', 'product_id', 'store_id', 'qty', 'selling_price_aed', 'payment_status'],
+        'inventory': ['snapshot_date', 'product_id', 'store_id', 'stock_on_hand']
+    }
+    
+    # Optional but recommended columns
+    optional_cols = {
+        'products': ['unit_cost_aed', 'brand', 'tax_rate', 'launch_flag'],
+        'stores': ['fulfillment_type', 'store_name', 'opening_date'],
+        'sales': ['discount_pct', 'return_flag', 'customer_id'],
+        'inventory': ['reorder_point', 'lead_time_days']
+    }
+    
+    # Check products
+    if products_df is not None:
+        missing = [c for c in required_cols['products'] if c not in products_df.columns]
+        if missing:
+            errors.append(f"Products CSV missing required columns: {missing}")
+        opt_missing = [c for c in optional_cols['products'] if c not in products_df.columns]
+        if opt_missing:
+            warnings.append(f"Products CSV missing optional columns (will use defaults): {opt_missing}")
+    else:
+        errors.append("Products CSV is required")
+    
+    # Check stores
+    if stores_df is not None:
+        missing = [c for c in required_cols['stores'] if c not in stores_df.columns]
+        if missing:
+            errors.append(f"Stores CSV missing required columns: {missing}")
+    else:
+        errors.append("Stores CSV is required")
+    
+    # Check sales
+    if sales_df is not None:
+        missing = [c for c in required_cols['sales'] if c not in sales_df.columns]
+        if missing:
+            errors.append(f"Sales CSV missing required columns: {missing}")
+        opt_missing = [c for c in optional_cols['sales'] if c not in sales_df.columns]
+        if opt_missing:
+            warnings.append(f"Sales CSV missing optional columns (will use defaults): {opt_missing}")
+    else:
+        errors.append("Sales CSV is required")
+    
+    # Check inventory
+    if inventory_df is not None:
+        missing = [c for c in required_cols['inventory'] if c not in inventory_df.columns]
+        if missing:
+            errors.append(f"Inventory CSV missing required columns: {missing}")
+    else:
+        errors.append("Inventory CSV is required")
+    
+    return errors, warnings
+
+
+def add_default_columns(df, file_type):
+    """Add default values for missing optional columns"""
+    if df is None:
+        return df
+    
+    df = df.copy()
+    
+    if file_type == 'products':
+        if 'unit_cost_aed' not in df.columns:
+            df['unit_cost_aed'] = df['base_price_aed'] * 0.6  # Assume 40% margin
+        if 'brand' not in df.columns:
+            df['brand'] = 'Unknown'
+        if 'tax_rate' not in df.columns:
+            df['tax_rate'] = 0.05
+        if 'launch_flag' not in df.columns:
+            df['launch_flag'] = 'Regular'
+    
+    elif file_type == 'stores':
+        if 'fulfillment_type' not in df.columns:
+            df['fulfillment_type'] = 'Own'
+        if 'store_name' not in df.columns:
+            df['store_name'] = df['store_id']
+    
+    elif file_type == 'sales':
+        if 'discount_pct' not in df.columns:
+            df['discount_pct'] = 0
+        if 'return_flag' not in df.columns:
+            df['return_flag'] = 0
+        if 'customer_id' not in df.columns:
+            df['customer_id'] = 'CUST_00000'
+    
+    elif file_type == 'inventory':
+        if 'reorder_point' not in df.columns:
+            df['reorder_point'] = 20
+        if 'lead_time_days' not in df.columns:
+            df['lead_time_days'] = 7
+    
+    return df
 
 
 # =============================================================================
@@ -257,11 +357,9 @@ def create_historical_prediction_chart(daily_df):
     df = daily_df.copy()
     df['date'] = pd.to_datetime(df['date'])
     
-    # Calculate simple moving average for "prediction"
     df['ma7'] = df['revenue'].rolling(7, min_periods=1).mean()
     df['ma14'] = df['revenue'].rolling(14, min_periods=1).mean()
     
-    # Generate forecast for next 7 days using trend
     last_ma = df['ma7'].iloc[-1]
     trend = (df['ma7'].iloc[-1] - df['ma7'].iloc[-7]) / 7 if len(df) >= 7 else 0
     
@@ -272,7 +370,6 @@ def create_historical_prediction_chart(daily_df):
     
     fig = go.Figure()
     
-    # Historical data
     fig.add_trace(go.Scatter(
         x=df['date'], y=df['revenue'],
         mode='lines+markers',
@@ -280,7 +377,6 @@ def create_historical_prediction_chart(daily_df):
         line=dict(color='#1E3A5F', width=2)
     ))
     
-    # Moving average
     fig.add_trace(go.Scatter(
         x=df['date'], y=df['ma7'],
         mode='lines',
@@ -288,7 +384,6 @@ def create_historical_prediction_chart(daily_df):
         line=dict(color='#00D4AA', width=2, dash='dot')
     ))
     
-    # Forecast
     fig.add_trace(go.Scatter(
         x=future_dates, y=forecast,
         mode='lines+markers',
@@ -296,7 +391,6 @@ def create_historical_prediction_chart(daily_df):
         line=dict(color='#667eea', width=2, dash='dash')
     ))
     
-    # Confidence interval
     fig.add_trace(go.Scatter(
         x=list(future_dates) + list(future_dates)[::-1],
         y=forecast_upper + forecast_lower[::-1],
@@ -324,14 +418,11 @@ def create_outlier_detection_plot(sales_df):
     
     df = sales_df.copy()
     
-    # Calculate z-scores for outlier detection
-    df['price_zscore'] = (df['selling_price_aed'] - df['selling_price_aed'].mean()) / df['selling_price_aed'].std()
-    df['qty_zscore'] = (df['qty'] - df['qty'].mean()) / df['qty'].std()
+    df['price_zscore'] = (df['selling_price_aed'] - df['selling_price_aed'].mean()) / (df['selling_price_aed'].std() + 0.001)
+    df['qty_zscore'] = (df['qty'] - df['qty'].mean()) / (df['qty'].std() + 0.001)
     
-    # Flag outliers (|z| > 2)
     df['is_outlier'] = ((abs(df['price_zscore']) > 2) | (abs(df['qty_zscore']) > 2)).astype(int)
     
-    # Sample for performance
     sample = df.sample(min(1000, len(df)))
     
     fig = px.scatter(
@@ -345,7 +436,6 @@ def create_outlier_detection_plot(sales_df):
         labels={'is_outlier': 'Outlier', 'qty': 'Quantity', 'selling_price_aed': 'Price (AED)'}
     )
     
-    # Add threshold lines
     price_upper = df['selling_price_aed'].mean() + 2 * df['selling_price_aed'].std()
     qty_upper = df['qty'].mean() + 2 * df['qty'].std()
     
@@ -369,13 +459,14 @@ def create_comparison_matrix(sales_df, products_df, stores_df):
     
     df = sales_df.copy()
     
-    # Merge if needed
     if 'category' not in df.columns:
         df = df.merge(products_df[['product_id', 'category']], on='product_id', how='left')
     if 'channel' not in df.columns:
         df = df.merge(stores_df[['store_id', 'channel']], on='store_id', how='left')
     
-    # Create pivot table
+    if 'category' not in df.columns or 'channel' not in df.columns:
+        return None
+    
     pivot = df.pivot_table(
         values='line_total',
         index='category',
@@ -384,7 +475,6 @@ def create_comparison_matrix(sales_df, products_df, stores_df):
         fill_value=0
     )
     
-    # Convert to thousands
     pivot = pivot / 1000
     
     fig = px.imshow(
@@ -412,7 +502,6 @@ def create_margin_profitability_chart(breakdown_df):
         specs=[[{"type": "bar"}, {"type": "scatter"}]]
     )
     
-    # Revenue and Margin bars
     fig.add_trace(
         go.Bar(name='Revenue', x=df['category'], y=df['revenue']/1000, marker_color='#1E3A5F'),
         row=1, col=1
@@ -422,7 +511,6 @@ def create_margin_profitability_chart(breakdown_df):
         row=1, col=1
     )
     
-    # Profitability scatter (Revenue vs Margin %)
     fig.add_trace(
         go.Scatter(
             x=df['revenue']/1000,
@@ -436,7 +524,6 @@ def create_margin_profitability_chart(breakdown_df):
         row=1, col=2
     )
     
-    # Add quadrant lines
     avg_revenue = df['revenue'].mean() / 1000
     avg_margin = df['margin_pct'].mean()
     fig.add_hline(y=avg_margin, line_dash="dash", line_color="gray", row=1, col=2)
@@ -476,7 +563,6 @@ def create_growth_trends_chart(daily_df):
     
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     
-    # Revenue bars
     fig.add_trace(
         go.Bar(
             x=weekly['week_label'],
@@ -487,7 +573,6 @@ def create_growth_trends_chart(daily_df):
         secondary_y=False
     )
     
-    # Growth line
     fig.add_trace(
         go.Scatter(
             x=weekly['week_label'],
@@ -499,7 +584,6 @@ def create_growth_trends_chart(daily_df):
         secondary_y=True
     )
     
-    # Zero line for growth
     fig.add_hline(y=0, line_dash="dash", line_color="gray", secondary_y=True)
     
     fig.update_layout(
@@ -521,21 +605,18 @@ def create_cumulative_performance(daily_df):
     
     df = daily_df.copy()
     df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values('date')
+    df = df.sort_values('date').reset_index(drop=True)
     
-    # Calculate cumulative metrics
     df['cum_revenue'] = df['revenue'].cumsum()
     df['cum_orders'] = df['orders'].cumsum()
     df['cum_units'] = df['units'].cumsum()
     
-    # Create target line (assume 10% above actual as target)
     total_days = len(df)
     target_daily = df['revenue'].sum() * 1.1 / total_days
-    df['target'] = target_daily * (df.index - df.index[0] + 1)
+    df['target'] = target_daily * (df.index + 1)
     
     fig = go.Figure()
     
-    # Actual cumulative
     fig.add_trace(go.Scatter(
         x=df['date'], y=df['cum_revenue'],
         mode='lines',
@@ -545,16 +626,12 @@ def create_cumulative_performance(daily_df):
         fillcolor='rgba(30,58,95,0.1)'
     ))
     
-    # Target line
     fig.add_trace(go.Scatter(
         x=df['date'], y=df['target'],
         mode='lines',
         name='Target',
         line=dict(color='#f5576c', width=2, dash='dash')
     ))
-    
-    # Add achievement markers
-    df['achievement'] = (df['cum_revenue'] / df['target'] * 100).round(1)
     
     fig.update_layout(
         title="Cumulative Revenue Performance vs Target",
@@ -573,22 +650,21 @@ def create_performance_matrix(kpis_by_dimension):
     if len(kpis_by_dimension) == 0:
         return None
     
-    # Normalize KPIs for comparison
     df = kpis_by_dimension.copy()
     
-    # Select numeric columns
     metrics = ['revenue', 'margin_pct', 'orders', 'avg_discount']
     for m in metrics:
         if m in df.columns:
-            df[f'{m}_norm'] = (df[m] - df[m].min()) / (df[m].max() - df[m].min() + 0.001) * 100
+            min_val = df[m].min()
+            max_val = df[m].max()
+            df[f'{m}_norm'] = (df[m] - min_val) / (max_val - min_val + 0.001) * 100
     
     norm_cols = [c for c in df.columns if '_norm' in c]
     
     if len(norm_cols) == 0:
         return None
     
-    # Create heatmap data
-    dimension_col = df.columns[0]  # First column is the dimension
+    dimension_col = df.columns[0]
     heat_data = df.set_index(dimension_col)[norm_cols]
     heat_data.columns = [c.replace('_norm', '').title() for c in heat_data.columns]
     
@@ -609,7 +685,6 @@ def create_whatif_heatmap(simulator, sim_params, filters):
     discounts = [5, 10, 15, 20, 25, 30]
     categories = ['Electronics', 'Fashion', 'Grocery', 'Home & Garden', 'Beauty', 'Sports']
     
-    # Build matrix
     profit_matrix = []
     
     for cat in categories:
@@ -626,7 +701,7 @@ def create_whatif_heatmap(simulator, sim_params, filters):
                     category=cat
                 )
                 profit = result['results'].get('profit_proxy', 0) if result.get('results') else 0
-                row.append(profit / 1000)  # Convert to thousands
+                row.append(profit / 1000)
             except Exception:
                 row.append(0)
         profit_matrix.append(row)
@@ -674,13 +749,11 @@ def create_dual_axis_growth_target(daily_df, target_multiplier=1.1):
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date')
     
-    # Calculate daily growth rate
     df['growth_rate'] = df['revenue'].pct_change() * 100
     df['target'] = df['revenue'].mean() * target_multiplier
     
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     
-    # Revenue area
     fig.add_trace(
         go.Scatter(
             x=df['date'], y=df['revenue'],
@@ -692,7 +765,6 @@ def create_dual_axis_growth_target(daily_df, target_multiplier=1.1):
         secondary_y=False
     )
     
-    # Target line
     fig.add_trace(
         go.Scatter(
             x=df['date'], y=[df['target'].iloc[0]] * len(df),
@@ -702,7 +774,6 @@ def create_dual_axis_growth_target(daily_df, target_multiplier=1.1):
         secondary_y=False
     )
     
-    # Growth rate line
     fig.add_trace(
         go.Scatter(
             x=df['date'], y=df['growth_rate'],
@@ -738,6 +809,8 @@ if 'raw_data_generated' not in st.session_state:
     st.session_state.raw_data_generated = False
 if 'cleaning_stats' not in st.session_state:
     st.session_state.cleaning_stats = None
+if 'data_source' not in st.session_state:
+    st.session_state.data_source = 'generate'
 
 
 # =============================================================================
@@ -757,57 +830,189 @@ view_type = "Executive" if "Executive" in view else "Manager"
 
 st.sidebar.markdown("---")
 
-# Data Source
+# =============================================================================
+# DATA SOURCE SELECTION
+# =============================================================================
 st.sidebar.markdown("### 📁 Data Source")
 
-col1, col2 = st.sidebar.columns(2)
-with col1:
-    if st.button("🎲 Generate", use_container_width=True):
-        with st.spinner("Generating synthetic data..."):
-            st.session_state.raw_data = generate_all_data('data/raw')
-            st.session_state.raw_data_generated = True
-            st.session_state.data_loaded = False
-        st.rerun()
+data_source_option = st.sidebar.radio(
+    "Choose data source:",
+    ["🎲 Generate Sample Data", "📤 Upload Your Own Data"],
+    help="Generate synthetic data for demo or upload your own CSV files"
+)
 
-with col2:
-    if st.button("🧹 Clean", use_container_width=True, 
-                disabled=not st.session_state.raw_data_generated):
-        if st.session_state.raw_data:
-            with st.spinner("Cleaning data..."):
-                orig = {}
-                for k, v in st.session_state.raw_data.items():
-                    if isinstance(v, pd.DataFrame):
-                        orig[k] = len(v)
-                
-                cleaner = DataCleaner()
-                cleaned = cleaner.clean_all(
-                    st.session_state.raw_data['products'],
-                    st.session_state.raw_data['stores'],
-                    st.session_state.raw_data['sales'],
-                    st.session_state.raw_data['inventory'],
-                    'data/cleaned'
-                )
-                st.session_state.data = cleaned
-                
-                cc = {}
-                for k, v in cleaned.items():
-                    if isinstance(v, pd.DataFrame) and k != 'issues':
-                        cc[k] = len(v)
-                
-                st.session_state.cleaning_stats = {
-                    'original': orig,
-                    'cleaned': cc,
-                    'removed': {k: orig.get(k, 0) - cc.get(k, 0) for k in cc},
-                    'total_issues': len(cleaned['issues']),
-                    'issues_summary': cleaned['issues']['issue_type'].value_counts().to_dict() if len(cleaned['issues']) > 0 else {}
-                }
-                st.session_state.data_loaded = True
+if "Generate" in data_source_option:
+    st.session_state.data_source = 'generate'
+    
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("🎲 Generate", use_container_width=True):
+            with st.spinner("Generating synthetic data..."):
+                st.session_state.raw_data = generate_all_data('data/raw')
+                st.session_state.raw_data_generated = True
+                st.session_state.data_loaded = False
             st.rerun()
 
-if st.session_state.raw_data_generated and not st.session_state.data_loaded:
-    st.sidebar.success("✅ Raw data generated!")
-if st.session_state.data_loaded:
-    st.sidebar.success("✅ Data cleaned & ready!")
+    with col2:
+        if st.button("🧹 Clean", use_container_width=True, 
+                    disabled=not st.session_state.raw_data_generated):
+            if st.session_state.raw_data:
+                with st.spinner("Cleaning data..."):
+                    orig = {}
+                    for k, v in st.session_state.raw_data.items():
+                        if isinstance(v, pd.DataFrame):
+                            orig[k] = len(v)
+                    
+                    cleaner = DataCleaner()
+                    cleaned = cleaner.clean_all(
+                        st.session_state.raw_data['products'],
+                        st.session_state.raw_data['stores'],
+                        st.session_state.raw_data['sales'],
+                        st.session_state.raw_data['inventory'],
+                        'data/cleaned'
+                    )
+                    st.session_state.data = cleaned
+                    
+                    cc = {}
+                    for k, v in cleaned.items():
+                        if isinstance(v, pd.DataFrame) and k != 'issues':
+                            cc[k] = len(v)
+                    
+                    st.session_state.cleaning_stats = {
+                        'original': orig,
+                        'cleaned': cc,
+                        'removed': {k: orig.get(k, 0) - cc.get(k, 0) for k in cc},
+                        'total_issues': len(cleaned['issues']),
+                        'issues_summary': cleaned['issues']['issue_type'].value_counts().to_dict() if len(cleaned['issues']) > 0 else {}
+                    }
+                    st.session_state.data_loaded = True
+                st.rerun()
+
+    if st.session_state.raw_data_generated and not st.session_state.data_loaded:
+        st.sidebar.success("✅ Raw data generated!")
+    if st.session_state.data_loaded and st.session_state.data_source == 'generate':
+        st.sidebar.success("✅ Data cleaned & ready!")
+
+else:
+    # UPLOAD YOUR OWN DATA
+    st.session_state.data_source = 'upload'
+    
+    st.sidebar.markdown("#### Upload CSV Files")
+    st.sidebar.markdown("<small>Upload all 4 required files:</small>", unsafe_allow_html=True)
+    
+    # File uploaders
+    uploaded_products = st.sidebar.file_uploader(
+        "📦 Products CSV",
+        type=['csv'],
+        key='upload_products',
+        help="Required: product_id, category, base_price_aed"
+    )
+    
+    uploaded_stores = st.sidebar.file_uploader(
+        "🏪 Stores CSV",
+        type=['csv'],
+        key='upload_stores',
+        help="Required: store_id, city, channel"
+    )
+    
+    uploaded_sales = st.sidebar.file_uploader(
+        "💰 Sales CSV",
+        type=['csv'],
+        key='upload_sales',
+        help="Required: order_id, order_time, product_id, store_id, qty, selling_price_aed, payment_status"
+    )
+    
+    uploaded_inventory = st.sidebar.file_uploader(
+        "📊 Inventory CSV",
+        type=['csv'],
+        key='upload_inventory',
+        help="Required: snapshot_date, product_id, store_id, stock_on_hand"
+    )
+    
+    # Check upload status
+    all_uploaded = all([uploaded_products, uploaded_stores, uploaded_sales, uploaded_inventory])
+    
+    if all_uploaded:
+        st.sidebar.success("✅ All files uploaded!")
+        
+        if st.sidebar.button("🔄 Process & Clean Data", use_container_width=True):
+            with st.spinner("Processing uploaded data..."):
+                try:
+                    # Read CSVs
+                    products_df = pd.read_csv(uploaded_products)
+                    stores_df = pd.read_csv(uploaded_stores)
+                    sales_df = pd.read_csv(uploaded_sales)
+                    inventory_df = pd.read_csv(uploaded_inventory)
+                    
+                    # Validate
+                    errors, warnings = validate_uploaded_data(products_df, stores_df, sales_df, inventory_df)
+                    
+                    if errors:
+                        for err in errors:
+                            st.sidebar.error(err)
+                    else:
+                        # Show warnings
+                        for warn in warnings:
+                            st.sidebar.warning(warn)
+                        
+                        # Add default columns
+                        products_df = add_default_columns(products_df, 'products')
+                        stores_df = add_default_columns(stores_df, 'stores')
+                        sales_df = add_default_columns(sales_df, 'sales')
+                        inventory_df = add_default_columns(inventory_df, 'inventory')
+                        
+                        # Store original counts
+                        orig = {
+                            'products': len(products_df),
+                            'stores': len(stores_df),
+                            'sales': len(sales_df),
+                            'inventory': len(inventory_df)
+                        }
+                        
+                        # Clean data
+                        cleaner = DataCleaner()
+                        cleaned = cleaner.clean_all(
+                            products_df, stores_df, sales_df, inventory_df,
+                            'data/cleaned'
+                        )
+                        
+                        st.session_state.data = cleaned
+                        
+                        cc = {}
+                        for k, v in cleaned.items():
+                            if isinstance(v, pd.DataFrame) and k != 'issues':
+                                cc[k] = len(v)
+                        
+                        st.session_state.cleaning_stats = {
+                            'original': orig,
+                            'cleaned': cc,
+                            'removed': {k: orig.get(k, 0) - cc.get(k, 0) for k in cc},
+                            'total_issues': len(cleaned['issues']),
+                            'issues_summary': cleaned['issues']['issue_type'].value_counts().to_dict() if len(cleaned['issues']) > 0 else {}
+                        }
+                        st.session_state.data_loaded = True
+                        st.session_state.raw_data_generated = False
+                        
+                        st.sidebar.success("✅ Data processed successfully!")
+                        st.rerun()
+                        
+                except Exception as e:
+                    st.sidebar.error(f"Error processing files: {str(e)}")
+    else:
+        # Show which files are missing
+        missing = []
+        if not uploaded_products:
+            missing.append("Products")
+        if not uploaded_stores:
+            missing.append("Stores")
+        if not uploaded_sales:
+            missing.append("Sales")
+        if not uploaded_inventory:
+            missing.append("Inventory")
+        
+        if missing:
+            st.sidebar.info(f"📋 Still need: {', '.join(missing)}")
+
 
 # =============================================================================
 # FILTERS
@@ -883,7 +1088,7 @@ if not st.session_state.data_loaded:
     # Welcome Screen
     st.markdown("---")
     
-    if st.session_state.raw_data_generated:
+    if st.session_state.data_source == 'generate' and st.session_state.raw_data_generated:
         st.success("✅ Raw data generated! Click 'Clean' in the sidebar to process.")
         
         if st.session_state.raw_data:
@@ -895,8 +1100,148 @@ if not st.session_state.data_loaded:
                 cols[1].metric("Stores", f"{meta.get('stores_count', 0):,}")
                 cols[2].metric("Sales", f"{meta.get('sales_count', 0):,}")
                 cols[3].metric("Inventory", f"{meta.get('inventory_records', 0):,}")
+    
+    elif st.session_state.data_source == 'upload':
+        # Upload instructions
+        st.info("👈 Upload your CSV files in the sidebar to get started")
+        
+        st.markdown("### 📋 Required Data Format")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            #### 📦 Products CSV
+            **Required columns:**
+            - `product_id` - Unique product identifier
+            - `category` - Product category
+            - `base_price_aed` - Base price in AED
+            
+            **Optional columns:**
+            - `unit_cost_aed` - Unit cost (defaults to 60% of base price)
+            - `brand` - Brand name
+            - `tax_rate` - Tax rate (default: 0.05)
+            - `launch_flag` - New/Regular
+            """)
+            
+            st.markdown("""
+            #### 🏪 Stores CSV
+            **Required columns:**
+            - `store_id` - Unique store identifier
+            - `city` - City name (e.g., Dubai, Abu Dhabi, Sharjah)
+            - `channel` - Sales channel (App, Web, Marketplace)
+            
+            **Optional columns:**
+            - `fulfillment_type` - Own/3PL
+            - `store_name` - Store name
+            """)
+        
+        with col2:
+            st.markdown("""
+            #### 💰 Sales CSV
+            **Required columns:**
+            - `order_id` - Unique order identifier
+            - `order_time` - Order timestamp (YYYY-MM-DD HH:MM:SS)
+            - `product_id` - Product ID (must match Products)
+            - `store_id` - Store ID (must match Stores)
+            - `qty` - Quantity sold
+            - `selling_price_aed` - Selling price in AED
+            - `payment_status` - Paid/Failed/Refunded
+            
+            **Optional columns:**
+            - `discount_pct` - Discount percentage (default: 0)
+            - `return_flag` - 0/1 for returns
+            - `customer_id` - Customer identifier
+            """)
+            
+            st.markdown("""
+            #### 📊 Inventory CSV
+            **Required columns:**
+            - `snapshot_date` - Date of inventory snapshot (YYYY-MM-DD)
+            - `product_id` - Product ID (must match Products)
+            - `store_id` - Store ID (must match Stores)
+            - `stock_on_hand` - Current stock quantity
+            
+            **Optional columns:**
+            - `reorder_point` - Reorder threshold
+            - `lead_time_days` - Lead time in days
+            """)
+        
+        # Download templates
+        st.markdown("---")
+        st.markdown("### 📥 Download Sample Templates")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            sample_products = pd.DataFrame({
+                'product_id': ['PROD_0001', 'PROD_0002', 'PROD_0003'],
+                'category': ['Electronics', 'Fashion', 'Grocery'],
+                'brand': ['Samsung', 'Nike', 'Almarai'],
+                'base_price_aed': [1500, 350, 25],
+                'unit_cost_aed': [900, 200, 15]
+            })
+            st.download_button(
+                "📦 Products Template",
+                sample_products.to_csv(index=False),
+                "products_template.csv",
+                "text/csv",
+                use_container_width=True
+            )
+        
+        with col2:
+            sample_stores = pd.DataFrame({
+                'store_id': ['STORE_01', 'STORE_02', 'STORE_03'],
+                'city': ['Dubai', 'Abu Dhabi', 'Sharjah'],
+                'channel': ['App', 'Web', 'Marketplace'],
+                'fulfillment_type': ['Own', '3PL', 'Own']
+            })
+            st.download_button(
+                "🏪 Stores Template",
+                sample_stores.to_csv(index=False),
+                "stores_template.csv",
+                "text/csv",
+                use_container_width=True
+            )
+        
+        with col3:
+            sample_sales = pd.DataFrame({
+                'order_id': ['ORD_000001', 'ORD_000002', 'ORD_000003'],
+                'order_time': ['2024-01-15 10:30:00', '2024-01-15 11:45:00', '2024-01-16 09:00:00'],
+                'product_id': ['PROD_0001', 'PROD_0002', 'PROD_0003'],
+                'store_id': ['STORE_01', 'STORE_02', 'STORE_03'],
+                'qty': [1, 2, 5],
+                'selling_price_aed': [1350, 315, 22.50],
+                'discount_pct': [10, 10, 10],
+                'payment_status': ['Paid', 'Paid', 'Paid'],
+                'return_flag': [0, 0, 0]
+            })
+            st.download_button(
+                "💰 Sales Template",
+                sample_sales.to_csv(index=False),
+                "sales_template.csv",
+                "text/csv",
+                use_container_width=True
+            )
+        
+        with col4:
+            sample_inventory = pd.DataFrame({
+                'snapshot_date': ['2024-01-15', '2024-01-15', '2024-01-15'],
+                'product_id': ['PROD_0001', 'PROD_0002', 'PROD_0003'],
+                'store_id': ['STORE_01', 'STORE_02', 'STORE_03'],
+                'stock_on_hand': [50, 120, 500],
+                'reorder_point': [10, 20, 50]
+            })
+            st.download_button(
+                "📊 Inventory Template",
+                sample_inventory.to_csv(index=False),
+                "inventory_template.csv",
+                "text/csv",
+                use_container_width=True
+            )
+    
     else:
-        st.info("👈 Click 'Generate' in the sidebar to create sample data, then 'Clean' to process it")
+        st.info("👈 Choose a data source in the sidebar to get started")
         
         # Feature cards
         st.markdown("### 🚀 Dashboard Features")
@@ -934,11 +1279,11 @@ if not st.session_state.data_loaded:
             st.markdown("""
             <div style="background: linear-gradient(135deg, #1E3A5F 0%, #2E5A8F 100%); 
                         padding: 1.5rem; border-radius: 10px; color: white;">
-                <h4 style="color: #00D4AA;">🧹 Data Quality</h4>
+                <h4 style="color: #00D4AA;">📤 Flexible Data Input</h4>
                 <ul style="font-size: 0.85rem;">
-                    <li>7+ Validation Rules</li>
-                    <li>Issue Logging</li>
-                    <li>Auto-Cleaning</li>
+                    <li>Generate Sample Data</li>
+                    <li>Upload Your Own CSVs</li>
+                    <li>Auto Data Cleaning</li>
                     <li>Quality Reports</li>
                 </ul>
             </div>
@@ -949,6 +1294,10 @@ else:
     # DASHBOARD WITH DATA
     # ==========================================================================
     data = st.session_state.data
+    
+    # Show data source indicator
+    if st.session_state.data_source == 'upload':
+        st.info("📤 **Using Uploaded Data** | Switch to 'Generate Sample Data' in sidebar for demo data")
     
     # Initialize calculators
     try:
@@ -998,6 +1347,18 @@ else:
             col2.metric("Records Removed", f"{sum(stats['removed'].values()):,}")
             col3.metric("Cleaned Records", f"{sum(stats['cleaned'].values()):,}")
             col4.metric("Issues Logged", f"{stats['total_issues']:,}")
+            
+            if stats.get('issues_summary'):
+                st.markdown("#### Issues by Type")
+                issues_df = pd.DataFrame([
+                    {"Issue Type": k, "Count": v}
+                    for k, v in stats['issues_summary'].items()
+                ]).sort_values('Count', ascending=False)
+                
+                fig = px.bar(issues_df, x='Issue Type', y='Count', color='Count',
+                            color_continuous_scale='Reds')
+                fig.update_layout(height=250, showlegend=False)
+                st.plotly_chart(fig, use_container_width=True)
     
     # ==========================================================================
     # EXECUTIVE VIEW
@@ -1041,33 +1402,26 @@ else:
         
         st.markdown("---")
         
-        # ==========================================================================
         # CHART ROW 1: Waterfall & Historical Prediction
-        # ==========================================================================
         section_header("Revenue Analysis", "📈")
         col1, col2 = st.columns(2)
         
         with col1:
-            # 5. WATERFALL CHART
             waterfall_fig = create_waterfall_chart(kpis)
             st.plotly_chart(waterfall_fig, use_container_width=True)
         
         with col2:
-            # 2. HISTORICAL PREDICTION CHART
             prediction_fig = create_historical_prediction_chart(daily)
             if prediction_fig:
                 st.plotly_chart(prediction_fig, use_container_width=True)
             else:
                 st.info("Insufficient data for forecast (need 7+ days)")
         
-        # ==========================================================================
         # CHART ROW 2: Growth Trends & Cumulative Performance
-        # ==========================================================================
         section_header("Growth & Performance", "📊")
         col1, col2 = st.columns(2)
         
         with col1:
-            # 9. GROWTH TRENDS
             growth_fig = create_growth_trends_chart(daily)
             if growth_fig:
                 st.plotly_chart(growth_fig, use_container_width=True)
@@ -1075,21 +1429,17 @@ else:
                 st.info("Insufficient data for growth analysis")
         
         with col2:
-            # 10. CUMULATIVE PERFORMANCE TRACKER
             cumulative_fig = create_cumulative_performance(daily)
             if cumulative_fig:
                 st.plotly_chart(cumulative_fig, use_container_width=True)
             else:
                 st.info("No data for cumulative tracking")
         
-        # ==========================================================================
         # CHART ROW 3: Donut & Comparison Matrix
-        # ==========================================================================
         section_header("Distribution & Comparison", "🔄")
         col1, col2 = st.columns(2)
         
         with col1:
-            # 8. DONUT CHART
             city_breakdown = kpi_calc.compute_breakdown(filtered_df, 'city')
             donut_fig = create_donut_chart(city_breakdown, 'city')
             if donut_fig:
@@ -1098,21 +1448,17 @@ else:
                 st.info("No data for distribution")
         
         with col2:
-            # 6. COMPARISON MATRIX
             matrix_fig = create_comparison_matrix(filtered_df, data['products'], data['stores'])
             if matrix_fig:
                 st.plotly_chart(matrix_fig, use_container_width=True)
             else:
                 st.info("No data for comparison matrix")
         
-        # ==========================================================================
         # CHART ROW 4: Margin Profitability & Performance Matrix
-        # ==========================================================================
         section_header("Profitability Analysis", "💎")
         col1, col2 = st.columns(2)
         
         with col1:
-            # 7. MARGIN PROFITABILITY
             cat_breakdown = kpi_calc.compute_breakdown(filtered_df, 'category')
             margin_fig = create_margin_profitability_chart(cat_breakdown)
             if margin_fig:
@@ -1121,7 +1467,6 @@ else:
                 st.info("No data for margin analysis")
         
         with col2:
-            # 11. PERFORMANCE MATRIX
             channel_breakdown = kpi_calc.compute_breakdown(filtered_df, 'channel')
             perf_matrix_fig = create_performance_matrix(channel_breakdown)
             if perf_matrix_fig:
@@ -1129,12 +1474,8 @@ else:
             else:
                 st.info("No data for performance matrix")
         
-        # ==========================================================================
         # CHART ROW 5: What-If Heatmap
-        # ==========================================================================
         section_header("What-If Analysis", "🎯")
-        
-        # 12. WHAT-IF HEATMAP
         whatif_fig = create_whatif_heatmap(simulator, sim_params, filters)
         st.plotly_chart(whatif_fig, use_container_width=True)
         
@@ -1145,9 +1486,7 @@ else:
         </div>
         """, unsafe_allow_html=True)
         
-        # ==========================================================================
-        # RECOMMENDATIONS
-        # ==========================================================================
+        # Recommendations
         section_header("Auto-Generated Recommendations", "💡")
         recommendations = generate_recommendation(kpis, sim_results.get('results'), sim_results.get('violations', []))
         
@@ -1192,14 +1531,11 @@ else:
         
         st.markdown("---")
         
-        # ==========================================================================
         # CHART ROW 1: Outlier Detection & Dual Axis
-        # ==========================================================================
         section_header("Data Quality & Trends", "🔍")
         col1, col2 = st.columns(2)
         
         with col1:
-            # 4. OUTLIER DETECTION PLOT
             outlier_fig = create_outlier_detection_plot(filtered_df)
             if outlier_fig:
                 st.plotly_chart(outlier_fig, use_container_width=True)
@@ -1207,21 +1543,17 @@ else:
                 st.info("No data for outlier detection")
         
         with col2:
-            # 3. DUAL AXIS CHART
             dual_fig = create_dual_axis_growth_target(daily)
             if dual_fig:
                 st.plotly_chart(dual_fig, use_container_width=True)
             else:
                 st.info("Insufficient data for dual axis chart")
         
-        # ==========================================================================
         # CHART ROW 2: Scatter & Risk Table
-        # ==========================================================================
         section_header("Inventory & Risk Analysis", "📦")
         col1, col2 = st.columns(2)
         
         with col1:
-            # 1. SCATTER PLOT - Demand vs Stock
             sim_detail = sim_results.get('simulation_detail')
             if sim_detail is not None and len(sim_detail) > 0:
                 sample = sim_detail.sample(min(500, len(sim_detail)))
@@ -1247,7 +1579,6 @@ else:
                 st.info("No simulation data for scatter plot")
         
         with col2:
-            # Top Risk Items Table
             st.markdown("#### Top 10 Stockout Risk Items")
             top_risk = sim_results.get('top_risk_items')
             if top_risk is not None and len(top_risk) > 0:
@@ -1255,14 +1586,11 @@ else:
             else:
                 st.info("No risk items to display")
         
-        # ==========================================================================
-        # CHART ROW 3: Issues Pareto (Dual Axis) & Inventory Distribution
-        # ==========================================================================
+        # CHART ROW 3: Issues Pareto & Inventory Distribution
         section_header("Issues & Inventory", "⚠️")
         col1, col2 = st.columns(2)
         
         with col1:
-            # 3. DUAL AXIS - Issues Pareto
             if len(data['issues']) > 0:
                 issue_counts = data['issues']['issue_type'].value_counts().reset_index()
                 issue_counts.columns = ['Issue Type', 'Count']
@@ -1292,7 +1620,6 @@ else:
                 st.info("No issues logged")
         
         with col2:
-            # Inventory Distribution
             inv = data['inventory'].copy()
             inv['snapshot_date'] = pd.to_datetime(inv['snapshot_date'], errors='coerce')
             latest_date = inv['snapshot_date'].max()
@@ -1310,14 +1637,11 @@ else:
                 fig.update_layout(height=400, plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig, use_container_width=True)
         
-        # ==========================================================================
-        # CHART ROW 4: What-If Seasonality & Constraint Violations
-        # ==========================================================================
+        # CHART ROW 4: What-If Heatmap & Constraints
         section_header("Simulation & Constraints", "🎮")
         col1, col2 = st.columns(2)
         
         with col1:
-            # 12. WHAT-IF HEATMAP (Manager version - by channel)
             channels = ['App', 'Web', 'Marketplace']
             discounts = [5, 10, 15, 20, 25, 30]
             
@@ -1350,7 +1674,6 @@ else:
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            # Constraint Violations
             st.markdown("#### Constraint Violations")
             violations = sim_results.get('violations', [])
             
@@ -1422,6 +1745,6 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; padding: 1rem; color: #888;">
-    <strong>UAE PROMO PULSE</strong> v2.0 | Retail Analytics Dashboard | 12 Chart Types
+    <strong>UAE PROMO PULSE</strong> v2.0 | Retail Analytics Dashboard | 12 Chart Types | Upload or Generate Data
 </div>
 """, unsafe_allow_html=True)
