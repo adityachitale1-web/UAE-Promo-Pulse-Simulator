@@ -1,40 +1,13 @@
 """
 simulator.py
-UAE Promo Pulse Simulator - Simulation and KPI Computation Module
-Computes KPIs and runs what-if discount simulations with constraints
+KPI calculations and promotion simulation
 """
 
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-
-# ============================================================================
-# UPLIFT FACTORS CONFIGURATION
-# ============================================================================
-
-# Channel sensitivity to discounts (higher = more responsive)
-CHANNEL_UPLIFT_FACTORS = {
-    'Marketplace': 1.3,  # Most price-sensitive
-    'App': 1.1,
-    'Web': 1.0
-}
-
-# Category sensitivity to discounts
-CATEGORY_UPLIFT_FACTORS = {
-    'Electronics': 1.4,  # High-ticket items respond well
-    'Fashion': 1.3,
-    'Beauty': 1.2,
-    'Sports': 1.2,
-    'Home & Garden': 1.1,
-    'Grocery': 0.9  # Low elasticity
-}
-
-# Base uplift per discount percentage point
-BASE_UPLIFT_PER_DISCOUNT_PCT = 0.015  # 1.5% demand increase per 1% discount
-
 
 class KPICalculator:
-    """Calculate KPIs from cleaned data"""
+    """Calculate retail KPIs"""
     
     def __init__(self, sales_df, products_df, stores_df, inventory_df):
         self.sales = sales_df.copy()
@@ -43,28 +16,20 @@ class KPICalculator:
         self.inventory = inventory_df.copy()
         
         # Ensure datetime
-        if not pd.api.types.is_datetime64_any_dtype(self.sales['order_time']):
-            self.sales['order_time'] = pd.to_datetime(self.sales['order_time'])
+        if 'order_time' in self.sales.columns:
+            self.sales['order_time'] = pd.to_datetime(self.sales['order_time'], errors='coerce')
         
-        # Merge sales with products and stores for enriched analysis
-        self.sales_enriched = self.sales.merge(
-            self.products[['product_id', 'category', 'brand', 'base_price_aed', 'unit_cost_aed']],
-            on='product_id',
-            how='left'
-        ).merge(
-            self.stores[['store_id', 'city', 'channel', 'fulfillment_type']],
-            on='store_id',
-            how='left'
-        )
+        # Merge data
+        self.sales = self.sales.merge(self.products[['product_id', 'category', 'brand', 'unit_cost_aed']], on='product_id', how='left')
+        self.sales = self.sales.merge(self.stores[['store_id', 'city', 'channel', 'fulfillment_type']], on='store_id', how='left')
         
-        # Calculate line totals
-        self.sales_enriched['line_total'] = self.sales_enriched['qty'] * self.sales_enriched['selling_price_aed']
-        self.sales_enriched['line_cost'] = self.sales_enriched['qty'] * self.sales_enriched['unit_cost_aed']
+        # Calculate line total
+        self.sales['line_total'] = self.sales['qty'] * self.sales['selling_price_aed']
+        self.sales['line_cost'] = self.sales['qty'] * self.sales['unit_cost_aed'].fillna(0)
     
-    def filter_data(self, city=None, channel=None, category=None, 
-                    start_date=None, end_date=None, brand=None, fulfillment=None):
-        """Filter sales data based on criteria"""
-        df = self.sales_enriched.copy()
+    def filter_data(self, city=None, channel=None, category=None, brand=None, fulfillment=None, start_date=None, end_date=None):
+        """Filter sales data"""
+        df = self.sales.copy()
         
         if city and city != 'All':
             df = df[df['city'] == city]
@@ -83,75 +48,61 @@ class KPICalculator:
         
         return df
     
-    def compute_historical_kpis(self, df=None):
-        """Compute historical KPIs from sales data"""
-        if df is None:
-            df = self.sales_enriched
+    def compute_historical_kpis(self, df):
+        """Compute historical KPIs"""
+        if len(df) == 0:
+            return {
+                'gross_revenue': 0, 'net_revenue': 0, 'refund_amount': 0,
+                'cogs': 0, 'gross_margin': 0, 'gross_margin_pct': 0,
+                'total_orders': 0, 'total_units': 0, 'aov': 0,
+                'return_rate': 0, 'payment_failure_rate': 0
+            }
         
-        # Filter for valid calculations
-        paid_df = df[df['payment_status'] == 'Paid']
-        refund_df = df[df['payment_status'] == 'Refunded']
-        failed_df = df[df['payment_status'] == 'Failed']
+        # Revenue
+        paid_sales = df[df['payment_status'] == 'Paid']
+        gross_revenue = paid_sales['line_total'].sum()
         
-        # 1. Gross Revenue (Paid only)
-        gross_revenue = paid_df['line_total'].sum()
+        refunded = df[df['payment_status'] == 'Refunded']
+        refund_amount = refunded['line_total'].sum()
         
-        # 2. Refund Amount
-        refund_amount = refund_df['line_total'].sum()
+        returned = paid_sales[paid_sales['return_flag'] == 1]
+        return_amount = returned['line_total'].sum()
         
-        # 3. Net Revenue
-        net_revenue = gross_revenue - refund_amount
+        net_revenue = gross_revenue - refund_amount - return_amount
         
-        # 4. COGS (Cost of Goods Sold)
-        cogs = paid_df['line_cost'].sum()
-        
-        # 5. Gross Margin (AED)
+        # Costs
+        cogs = paid_sales['line_cost'].sum()
         gross_margin = net_revenue - cogs
-        
-        # 6. Gross Margin %
         gross_margin_pct = (gross_margin / net_revenue * 100) if net_revenue > 0 else 0
         
-        # 7. Average Discount %
-        avg_discount_pct = df['discount_pct'].mean() if len(df) > 0 else 0
-        
-        # 8. Total Orders
+        # Volume
         total_orders = df['order_id'].nunique()
+        total_units = paid_sales['qty'].sum()
+        aov = (net_revenue / total_orders) if total_orders > 0 else 0
         
-        # 9. Total Units Sold
-        total_units = paid_df['qty'].sum()
-        
-        # 10. Average Order Value
-        aov = gross_revenue / total_orders if total_orders > 0 else 0
-        
-        # 11. Return Rate %
-        returned_orders = df[df['return_flag'] == 1]['order_id'].nunique()
-        paid_orders = paid_df['order_id'].nunique()
-        return_rate = (returned_orders / paid_orders * 100) if paid_orders > 0 else 0
-        
-        # 12. Payment Failure Rate %
-        total_attempts = len(df)
-        failed_count = len(failed_df)
-        failure_rate = (failed_count / total_attempts * 100) if total_attempts > 0 else 0
+        # Rates
+        return_rate = (len(returned) / len(paid_sales) * 100) if len(paid_sales) > 0 else 0
+        failed = df[df['payment_status'] == 'Failed']
+        payment_failure_rate = (len(failed) / len(df) * 100) if len(df) > 0 else 0
         
         return {
-            'gross_revenue': round(gross_revenue, 2),
-            'refund_amount': round(refund_amount, 2),
-            'net_revenue': round(net_revenue, 2),
-            'cogs': round(cogs, 2),
-            'gross_margin': round(gross_margin, 2),
-            'gross_margin_pct': round(gross_margin_pct, 2),
-            'avg_discount_pct': round(avg_discount_pct, 2),
+            'gross_revenue': gross_revenue,
+            'net_revenue': net_revenue,
+            'refund_amount': refund_amount,
+            'cogs': cogs,
+            'gross_margin': gross_margin,
+            'gross_margin_pct': gross_margin_pct,
             'total_orders': total_orders,
-            'total_units': int(total_units),
-            'aov': round(aov, 2),
-            'return_rate': round(return_rate, 2),
-            'payment_failure_rate': round(failure_rate, 2)
+            'total_units': total_units,
+            'aov': aov,
+            'return_rate': return_rate,
+            'payment_failure_rate': payment_failure_rate
         }
     
-    def compute_daily_kpis(self, df=None):
-        """Compute daily KPIs for trend analysis"""
-        if df is None:
-            df = self.sales_enriched
+    def compute_daily_kpis(self, df):
+        """Compute daily KPIs"""
+        if len(df) == 0:
+            return pd.DataFrame(columns=['date', 'revenue', 'orders', 'units'])
         
         df = df.copy()
         df['date'] = df['order_time'].dt.date
@@ -159,23 +110,22 @@ class KPICalculator:
         daily = df[df['payment_status'] == 'Paid'].groupby('date').agg({
             'line_total': 'sum',
             'order_id': 'nunique',
-            'qty': 'sum',
-            'discount_pct': 'mean'
+            'qty': 'sum'
         }).reset_index()
         
-        daily.columns = ['date', 'revenue', 'orders', 'units', 'avg_discount']
-        daily['date'] = pd.to_datetime(daily['date'])
+        daily.columns = ['date', 'revenue', 'orders', 'units']
+        daily = daily.sort_values('date')
         
         return daily
     
-    def compute_breakdown(self, df=None, group_by='city'):
-        """Compute KPIs broken down by dimension"""
-        if df is None:
-            df = self.sales_enriched
+    def compute_breakdown(self, df, dimension):
+        """Compute KPIs by dimension"""
+        if len(df) == 0 or dimension not in df.columns:
+            return pd.DataFrame()
         
-        paid_df = df[df['payment_status'] == 'Paid']
+        paid = df[df['payment_status'] == 'Paid']
         
-        breakdown = paid_df.groupby(group_by).agg({
+        breakdown = paid.groupby(dimension).agg({
             'line_total': 'sum',
             'line_cost': 'sum',
             'order_id': 'nunique',
@@ -183,15 +133,15 @@ class KPICalculator:
             'discount_pct': 'mean'
         }).reset_index()
         
-        breakdown.columns = [group_by, 'revenue', 'cogs', 'orders', 'units', 'avg_discount']
+        breakdown.columns = [dimension, 'revenue', 'cogs', 'orders', 'units', 'avg_discount']
         breakdown['margin'] = breakdown['revenue'] - breakdown['cogs']
-        breakdown['margin_pct'] = (breakdown['margin'] / breakdown['revenue'] * 100).round(2)
+        breakdown['margin_pct'] = (breakdown['margin'] / breakdown['revenue'] * 100).fillna(0)
         
-        return breakdown
+        return breakdown.sort_values('revenue', ascending=False)
 
 
 class PromoSimulator:
-    """Run what-if discount simulations"""
+    """Simulate promotional scenarios"""
     
     def __init__(self, sales_df, products_df, stores_df, inventory_df):
         self.sales = sales_df.copy()
@@ -199,41 +149,14 @@ class PromoSimulator:
         self.stores = stores_df.copy()
         self.inventory = inventory_df.copy()
         
-        # Ensure datetime
-        if not pd.api.types.is_datetime64_any_dtype(self.sales['order_time']):
-            self.sales['order_time'] = pd.to_datetime(self.sales['order_time'])
-        
-        # Get latest inventory snapshot
-        if not pd.api.types.is_datetime64_any_dtype(self.inventory['snapshot_date']):
-            self.inventory['snapshot_date'] = pd.to_datetime(self.inventory['snapshot_date'])
-        
-        latest_date = self.inventory['snapshot_date'].max()
-        self.current_inventory = self.inventory[
-            self.inventory['snapshot_date'] == latest_date
-        ].copy()
-        
-        # Merge data
-        self.sales_enriched = self.sales.merge(
-            self.products[['product_id', 'category', 'brand', 'base_price_aed', 'unit_cost_aed']],
-            on='product_id', how='left'
-        ).merge(
-            self.stores[['store_id', 'city', 'channel', 'fulfillment_type']],
-            on='store_id', how='left'
-        )
+        # Merge
+        self.sales = self.sales.merge(self.products[['product_id', 'category', 'brand', 'unit_cost_aed', 'base_price_aed']], on='product_id', how='left')
+        self.sales = self.sales.merge(self.stores[['store_id', 'city', 'channel']], on='store_id', how='left')
     
-    def compute_baseline_demand(self, days=30, city=None, channel=None, category=None):
-        """Compute baseline daily demand per product-store from last N days"""
-        
-        # Filter to last N days
-        end_date = self.sales['order_time'].max()
-        start_date = end_date - timedelta(days=days)
-        
-        df = self.sales_enriched[
-            (self.sales_enriched['order_time'] >= start_date) &
-            (self.sales_enriched['payment_status'] == 'Paid')
-        ].copy()
-        
-        # Apply filters
+    def run_simulation(self, discount_pct, promo_budget, margin_floor, simulation_days, city=None, channel=None, category=None):
+        """Run promotion simulation"""
+        # Filter data
+        df = self.sales.copy()
         if city and city != 'All':
             df = df[df['city'] == city]
         if channel and channel != 'All':
@@ -241,258 +164,176 @@ class PromoSimulator:
         if category and category != 'All':
             df = df[df['category'] == category]
         
-        # Compute daily demand per product-store
-        baseline = df.groupby(['product_id', 'store_id', 'category', 'channel']).agg({
-            'qty': 'sum',
-            'selling_price_aed': 'mean',
-            'unit_cost_aed': 'first',
-            'base_price_aed': 'first'
+        if len(df) == 0:
+            return {'results': None, 'violations': [], 'detail_data': None, 'top_risk_items': None}
+        
+        # Calculate baseline metrics
+        daily_revenue = df['selling_price_aed'].sum() * df['qty'].sum() / 120  # Approx daily
+        daily_units = df['qty'].sum() / 120
+        
+        # Elasticity model (simple)
+        elasticity = 1.5
+        demand_multiplier = 1 + (discount_pct / 100) * elasticity
+        
+        # Projected metrics
+        sim_daily_units = daily_units * demand_multiplier
+        sim_total_units = sim_daily_units * simulation_days
+        
+        # Revenue after discount
+        avg_price = df['selling_price_aed'].mean()
+        sim_price = avg_price * (1 - discount_pct / 100)
+        sim_revenue = sim_total_units * sim_price
+        
+        # Costs
+        avg_cost = df['unit_cost_aed'].mean()
+        sim_cogs = sim_total_units * avg_cost
+        
+        # Discount cost (budget impact)
+        discount_cost = min(sim_total_units * avg_price * (discount_pct / 100), promo_budget)
+        
+        # Profit
+        profit_proxy = sim_revenue - sim_cogs - discount_cost
+        
+        # Margin check
+        margin_pct = ((sim_revenue - sim_cogs) / sim_revenue * 100) if sim_revenue > 0 else 0
+        
+        # Inventory analysis
+        latest_inv = self.inventory.copy()
+        latest_inv['snapshot_date'] = pd.to_datetime(latest_inv['snapshot_date'])
+        latest_date = latest_inv['snapshot_date'].max()
+        latest_inv = latest_inv[latest_inv['snapshot_date'] == latest_date]
+        
+        # Merge with products for category
+        latest_inv = latest_inv.merge(self.products[['product_id', 'category']], on='product_id', how='left')
+        
+        # Apply category filter to inventory
+        if category and category != 'All':
+            latest_inv = latest_inv[latest_inv['category'] == category]
+        
+        # Stockout risk
+        product_demand = df.groupby('product_id')['qty'].sum() / 120 * simulation_days * demand_multiplier
+        
+        inv_risk = latest_inv.groupby(['product_id', 'store_id', 'category']).agg({
+            'stock_on_hand': 'sum'
         }).reset_index()
         
-        baseline['daily_demand'] = baseline['qty'] / days
-        
-        return baseline
-    
-    def compute_uplift_factor(self, discount_pct, channel, category):
-        """Compute demand uplift factor based on discount and characteristics"""
-        
-        channel_factor = CHANNEL_UPLIFT_FACTORS.get(channel, 1.0)
-        category_factor = CATEGORY_UPLIFT_FACTORS.get(category, 1.0)
-        
-        # Uplift formula: base * channel * category * discount effect
-        # Diminishing returns after 20% discount
-        if discount_pct <= 20:
-            discount_effect = 1 + (discount_pct * BASE_UPLIFT_PER_DISCOUNT_PCT)
-        else:
-            base_effect = 20 * BASE_UPLIFT_PER_DISCOUNT_PCT
-            extra_effect = (discount_pct - 20) * BASE_UPLIFT_PER_DISCOUNT_PCT * 0.5  # Diminishing
-            discount_effect = 1 + base_effect + extra_effect
-        
-        return channel_factor * category_factor * discount_effect
-    
-    def run_simulation(self, discount_pct, promo_budget, margin_floor, 
-                       simulation_days=14, city=None, channel=None, category=None):
-        """Run what-if simulation with constraints"""
-        
-        # Get baseline demand
-        baseline = self.compute_baseline_demand(30, city, channel, category)
-        
-        if len(baseline) == 0:
-            return {
-                'success': False,
-                'message': 'No baseline data available for selected filters',
-                'results': None,
-                'violations': []
-            }
-        
-        # Merge with current inventory
-        sim_data = baseline.merge(
-            self.current_inventory[['product_id', 'store_id', 'stock_on_hand']],
-            on=['product_id', 'store_id'],
-            how='left'
+        inv_risk = inv_risk.merge(
+            product_demand.reset_index().rename(columns={'qty': 'sim_total_demand'}),
+            on='product_id', how='left'
         )
-        sim_data['stock_on_hand'] = sim_data['stock_on_hand'].fillna(0)
+        inv_risk['sim_total_demand'] = inv_risk['sim_total_demand'].fillna(0)
+        inv_risk['stockout_risk'] = (inv_risk['sim_total_demand'] / inv_risk['stock_on_hand'].replace(0, 1)).clip(0, 1)
         
-        # Apply filters to simulation data
-        if city and city != 'All':
-            store_ids = self.stores[self.stores['city'] == city]['store_id']
-            sim_data = sim_data[sim_data['store_id'].isin(store_ids)]
-        
-        # Compute uplift for each row
-        sim_data['uplift_factor'] = sim_data.apply(
-            lambda row: self.compute_uplift_factor(discount_pct, row['channel'], row['category']),
-            axis=1
-        )
-        
-        # Compute simulated demand
-        sim_data['sim_daily_demand'] = sim_data['daily_demand'] * sim_data['uplift_factor']
-        sim_data['sim_total_demand'] = sim_data['sim_daily_demand'] * simulation_days
-        
-        # Apply stock constraint
-        sim_data['constrained_qty'] = sim_data[['sim_total_demand', 'stock_on_hand']].min(axis=1)
-        
-        # Compute simulated metrics
-        sim_data['sim_selling_price'] = sim_data['base_price_aed'] * (1 - discount_pct / 100)
-        sim_data['sim_revenue'] = sim_data['constrained_qty'] * sim_data['sim_selling_price']
-        sim_data['sim_cost'] = sim_data['constrained_qty'] * sim_data['unit_cost_aed']
-        sim_data['sim_margin'] = sim_data['sim_revenue'] - sim_data['sim_cost']
-        sim_data['promo_cost'] = sim_data['constrained_qty'] * sim_data['base_price_aed'] * (discount_pct / 100)
-        
-        # Aggregate results
-        total_revenue = sim_data['sim_revenue'].sum()
-        total_cost = sim_data['sim_cost'].sum()
-        total_margin = sim_data['sim_margin'].sum()
-        total_promo_cost = sim_data['promo_cost'].sum()
-        total_qty = sim_data['constrained_qty'].sum()
-        
-        margin_pct = (total_margin / total_revenue * 100) if total_revenue > 0 else 0
-        profit_proxy = total_margin - total_promo_cost
-        budget_utilization = (total_promo_cost / promo_budget * 100) if promo_budget > 0 else 0
-        
-        # Check stockout risk
-        sim_data['demand_vs_stock'] = sim_data['sim_total_demand'] / sim_data['stock_on_hand'].replace(0, 0.001)
-        sim_data['stockout_risk'] = sim_data['demand_vs_stock'] > 0.8
-        stockout_risk_pct = (sim_data['stockout_risk'].sum() / len(sim_data) * 100) if len(sim_data) > 0 else 0
-        
-        # Check constraint violations
-        violations = []
-        
-        # Budget constraint
-        if total_promo_cost > promo_budget:
-            violations.append({
-                'constraint': 'BUDGET_EXCEEDED',
-                'message': f'Promo spend ({total_promo_cost:,.0f} AED) exceeds budget ({promo_budget:,.0f} AED)',
-                'severity': 'HIGH',
-                'excess': total_promo_cost - promo_budget
-            })
-        
-        # Margin floor constraint
-        if margin_pct < margin_floor:
-            violations.append({
-                'constraint': 'MARGIN_BELOW_FLOOR',
-                'message': f'Gross margin ({margin_pct:.1f}%) is below floor ({margin_floor}%)',
-                'severity': 'HIGH',
-                'shortfall': margin_floor - margin_pct
-            })
-        
-        # Stock constraint (informational)
-        stock_limited = sim_data[sim_data['sim_total_demand'] > sim_data['stock_on_hand']]
-        if len(stock_limited) > 0:
-            violations.append({
-                'constraint': 'STOCK_LIMITED',
-                'message': f'{len(stock_limited)} product-store combinations are stock-limited',
-                'severity': 'MEDIUM',
-                'affected_count': len(stock_limited)
-            })
+        stockout_risk_pct = (inv_risk['stockout_risk'] > 0.8).mean() * 100
+        high_risk_skus = (inv_risk['stockout_risk'] > 0.8).sum()
         
         # Top risk items
-        top_stockout_risk = sim_data.nlargest(10, 'demand_vs_stock')[
-            ['product_id', 'store_id', 'category', 'stock_on_hand', 'sim_total_demand', 'demand_vs_stock']
-        ].copy()
-        top_stockout_risk['demand_vs_stock'] = (top_stockout_risk['demand_vs_stock'] * 100).round(1)
-        top_stockout_risk.columns = ['Product', 'Store', 'Category', 'Stock', 'Projected Demand', 'Risk %']
+        top_risk = inv_risk.nlargest(10, 'stockout_risk')[['product_id', 'store_id', 'category', 'stock_on_hand', 'sim_total_demand', 'stockout_risk']]
+        top_risk['stockout_risk'] = (top_risk['stockout_risk'] * 100).round(1)
         
-        # Results summary
+        # Violations
+        violations = []
+        if margin_pct < margin_floor:
+            violations.append({
+                'constraint': 'MARGIN_FLOOR',
+                'message': f'Margin {margin_pct:.1f}% is below floor of {margin_floor}%',
+                'severity': 'HIGH'
+            })
+        
+        if discount_cost > promo_budget:
+            violations.append({
+                'constraint': 'BUDGET_EXCEEDED',
+                'message': f'Projected cost AED {discount_cost:,.0f} exceeds budget AED {promo_budget:,.0f}',
+                'severity': 'HIGH'
+            })
+        
+        if stockout_risk_pct > 30:
+            violations.append({
+                'constraint': 'STOCKOUT_RISK',
+                'message': f'{stockout_risk_pct:.1f}% of SKUs at risk of stockout',
+                'severity': 'MEDIUM'
+            })
+        
         results = {
-            'total_revenue': round(total_revenue, 2),
-            'total_cost': round(total_cost, 2),
-            'total_margin': round(total_margin, 2),
-            'margin_pct': round(margin_pct, 2),
-            'promo_spend': round(total_promo_cost, 2),
-            'profit_proxy': round(profit_proxy, 2),
-            'budget_utilization': round(budget_utilization, 2),
-            'total_units': int(total_qty),
-            'stockout_risk_pct': round(stockout_risk_pct, 2),
-            'high_risk_skus': int(sim_data['stockout_risk'].sum()),
-            'simulation_days': simulation_days,
-            'discount_pct': discount_pct,
-            'promo_budget': promo_budget,
-            'margin_floor': margin_floor
+            'sim_revenue': sim_revenue,
+            'sim_cogs': sim_cogs,
+            'sim_units': sim_total_units,
+            'discount_cost': discount_cost,
+            'profit_proxy': profit_proxy,
+            'margin_pct': margin_pct,
+            'budget_utilization': (discount_cost / promo_budget * 100) if promo_budget > 0 else 0,
+            'stockout_risk_pct': stockout_risk_pct,
+            'high_risk_skus': high_risk_skus
         }
         
         return {
-            'success': len([v for v in violations if v['severity'] == 'HIGH']) == 0,
-            'message': 'Simulation completed' + (' with violations' if violations else ' successfully'),
             'results': results,
             'violations': violations,
-            'detail_data': sim_data,
-            'top_risk_items': top_stockout_risk
+            'detail_data': inv_risk,
+            'top_risk_items': top_risk
         }
     
-    def run_scenario_comparison(self, discount_levels, promo_budget, margin_floor, 
-                                 simulation_days=14, city=None, channel=None, category=None):
-        """Run multiple scenarios for comparison"""
-        
+    def run_scenario_comparison(self, discount_levels, promo_budget, margin_floor, simulation_days, city=None, channel=None, category=None):
+        """Compare multiple scenarios"""
         scenarios = []
+        
         for discount in discount_levels:
             result = self.run_simulation(
-                discount, promo_budget, margin_floor, 
-                simulation_days, city, channel, category
+                discount_pct=discount,
+                promo_budget=promo_budget,
+                margin_floor=margin_floor,
+                simulation_days=simulation_days,
+                city=city, channel=channel, category=category
             )
+            
             if result['results']:
                 scenarios.append({
                     'discount_pct': discount,
-                    'revenue': result['results']['total_revenue'],
-                    'margin': result['results']['total_margin'],
-                    'margin_pct': result['results']['margin_pct'],
+                    'revenue': result['results']['sim_revenue'],
                     'profit_proxy': result['results']['profit_proxy'],
-                    'promo_spend': result['results']['promo_spend'],
-                    'stockout_risk': result['results']['stockout_risk_pct'],
-                    'feasible': result['success']
+                    'margin_pct': result['results']['margin_pct'],
+                    'stockout_risk': result['results']['stockout_risk_pct']
                 })
         
         return pd.DataFrame(scenarios)
 
 
 def generate_recommendation(kpis, sim_results, violations):
-    """Generate auto-recommendation text based on KPIs and simulation"""
-    
+    """Generate recommendations based on analysis"""
     recommendations = []
     
-    # Check margin health
-    if kpis['gross_margin_pct'] < 20:
-        recommendations.append("⚠️ Current gross margin is below 20%. Consider reducing discount depth.")
-    elif kpis['gross_margin_pct'] > 35:
-        recommendations.append("✅ Healthy gross margin allows room for promotional activity.")
+    # Margin recommendations
+    if kpis.get('gross_margin_pct', 0) < 15:
+        recommendations.append("⚠️ Current gross margin is below 15%. Review pricing strategy and supplier costs.")
+    elif kpis.get('gross_margin_pct', 0) > 30:
+        recommendations.append("✅ Healthy gross margin above 30%. Consider strategic discounts to drive volume.")
     
-    # Check simulation results
+    # Return rate
+    if kpis.get('return_rate', 0) > 10:
+        recommendations.append("⚠️ Return rate exceeds 10%. Investigate product quality and customer expectations.")
+    
+    # Payment failures
+    if kpis.get('payment_failure_rate', 0) > 8:
+        recommendations.append("⚠️ High payment failure rate. Review payment gateway and offer alternative methods.")
+    
+    # Simulation results
     if sim_results:
-        if sim_results['margin_pct'] < sim_results.get('margin_floor', 15):
-            recommendations.append(f"🚫 Simulated margin ({sim_results['margin_pct']:.1f}%) is below target. Reduce discount or narrow scope.")
-        
-        if sim_results['budget_utilization'] > 100:
-            recommendations.append(f"🚫 Budget exceeded by {sim_results['budget_utilization'] - 100:.1f}%. Scale back promotion.")
-        elif sim_results['budget_utilization'] < 50:
-            recommendations.append(f"💡 Only {sim_results['budget_utilization']:.1f}% budget utilized. Consider expanding promotion scope.")
-        
-        if sim_results['stockout_risk_pct'] > 30:
-            recommendations.append(f"⚠️ High stockout risk ({sim_results['stockout_risk_pct']:.1f}%). Review inventory for high-demand items.")
-        
-        if sim_results['profit_proxy'] > 0:
-            recommendations.append(f"✅ Positive profit proxy ({sim_results['profit_proxy']:,.0f} AED). Promotion is financially viable.")
+        if sim_results.get('profit_proxy', 0) > 0:
+            recommendations.append(f"✅ Simulation shows positive profit of AED {sim_results['profit_proxy']:,.0f}. Promotion is viable.")
         else:
-            recommendations.append(f"🚫 Negative profit proxy ({sim_results['profit_proxy']:,.0f} AED). Promotion may not be profitable.")
+            recommendations.append(f"🚫 Simulation shows loss of AED {abs(sim_results.get('profit_proxy', 0)):,.0f}. Adjust parameters.")
+        
+        if sim_results.get('stockout_risk_pct', 0) > 30:
+            recommendations.append(f"⚠️ High stockout risk ({sim_results['stockout_risk_pct']:.1f}%). Increase inventory before promotion.")
     
-    # Check violations
-    high_violations = [v for v in violations if v.get('severity') == 'HIGH']
-    if high_violations:
-        recommendations.append(f"❌ {len(high_violations)} critical constraint violation(s). Address before proceeding.")
+    # Violations
+    for v in violations:
+        if v['severity'] == 'HIGH':
+            recommendations.append(f"🚫 {v['message']}")
+        else:
+            recommendations.append(f"💡 {v['message']}")
     
     if not recommendations:
-        recommendations.append("✅ All metrics within acceptable ranges. Promotion can proceed.")
+        recommendations.append("✅ All metrics look healthy. Proceed with confidence!")
     
     return recommendations
-
-
-if __name__ == "__main__":
-    # Test with sample data
-    import os
-    
-    if os.path.exists('data/cleaned'):
-        sales = pd.read_csv('data/cleaned/sales_cleaned.csv')
-        products = pd.read_csv('data/cleaned/products_cleaned.csv')
-        stores = pd.read_csv('data/cleaned/stores_cleaned.csv')
-        inventory = pd.read_csv('data/cleaned/inventory_cleaned.csv')
-        
-        # Test KPI Calculator
-        kpi_calc = KPICalculator(sales, products, stores, inventory)
-        kpis = kpi_calc.compute_historical_kpis()
-        print("\nHistorical KPIs:")
-        for k, v in kpis.items():
-            print(f"  {k}: {v}")
-        
-        # Test Simulator
-        sim = PromoSimulator(sales, products, stores, inventory)
-        result = sim.run_simulation(
-            discount_pct=15,
-            promo_budget=50000,
-            margin_floor=15,
-            simulation_days=14
-        )
-        print("\nSimulation Results:")
-        print(f"  Success: {result['success']}")
-        if result['results']:
-            for k, v in result['results'].items():
-                print(f"  {k}: {v}")
-    else:
-        print("Run data_generator.py and cleaner.py first!")
