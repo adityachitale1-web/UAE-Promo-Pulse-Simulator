@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import os
+import base64
 
 from data_generator import generate_all_data
 from cleaner import DataCleaner
@@ -14,15 +15,126 @@ from simulator import KPICalculator, PromoSimulator, generate_recommendation
 # Page Config
 st.set_page_config(page_title="UAE Promo Pulse", page_icon="🛒", layout="wide")
 
+# ============================================================================
+# LOGO AND STYLES
+# ============================================================================
+def render_logo():
+    """Render SVG logo for UAE Promo Pulse"""
+    logo_html = """
+    <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 1rem;">
+        <svg width="400" height="100" viewBox="0 0 400 100" xmlns="http://www.w3.org/2000/svg">
+            <!-- Background Shape -->
+            <defs>
+                <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" style="stop-color:#1E3A5F;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#2E5A8F;stop-opacity:1" />
+                </linearGradient>
+                <linearGradient id="pulseGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#00D4AA;stop-opacity:1" />
+                    <stop offset="50%" style="stop-color:#00E5BB;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#00F5CC;stop-opacity:1" />
+                </linearGradient>
+                <linearGradient id="uaeGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" style="stop-color:#00A86B;stop-opacity:1" />
+                    <stop offset="33%" style="stop-color:#FFFFFF;stop-opacity:1" />
+                    <stop offset="66%" style="stop-color:#000000;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#CE1126;stop-opacity:1" />
+                </linearGradient>
+                <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.3"/>
+                </filter>
+            </defs>
+            
+            <!-- Main Container -->
+            <rect x="5" y="10" width="390" height="80" rx="15" ry="15" fill="url(#bgGrad)" filter="url(#shadow)"/>
+            
+            <!-- UAE Flag Stripe -->
+            <rect x="5" y="10" width="8" height="80" rx="4" ry="0" fill="url(#uaeGrad)"/>
+            
+            <!-- Shopping Cart Icon -->
+            <g transform="translate(25, 25)">
+                <circle cx="25" cy="25" r="22" fill="rgba(255,255,255,0.1)" stroke="url(#pulseGrad)" stroke-width="2"/>
+                <path d="M15 20 L18 20 L22 35 L35 35 L38 23 L20 23" fill="none" stroke="url(#pulseGrad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="24" cy="42" r="3" fill="url(#pulseGrad)"/>
+                <circle cx="34" cy="42" r="3" fill="url(#pulseGrad)"/>
+                <!-- Pulse waves -->
+                <path d="M42 25 Q47 15, 52 25 Q57 35, 62 25" fill="none" stroke="url(#pulseGrad)" stroke-width="2" stroke-linecap="round"/>
+            </g>
+            
+            <!-- Text: UAE -->
+            <text x="95" y="45" font-family="Arial Black, sans-serif" font-size="22" font-weight="900" fill="#FFFFFF">UAE</text>
+            
+            <!-- Text: PROMO -->
+            <text x="145" y="45" font-family="Arial Black, sans-serif" font-size="22" font-weight="900" fill="url(#pulseGrad)">PROMO</text>
+            
+            <!-- Text: PULSE -->
+            <text x="250" y="45" font-family="Arial Black, sans-serif" font-size="22" font-weight="900" fill="#FFFFFF">PULSE</text>
+            
+            <!-- Tagline -->
+            <text x="95" y="70" font-family="Arial, sans-serif" font-size="11" fill="rgba(255,255,255,0.8)" letter-spacing="1">RETAIL ANALYTICS &amp; PROMOTION SIMULATOR</text>
+            
+            <!-- Decorative pulse line -->
+            <path d="M340 35 L350 35 L355 25 L360 45 L365 30 L370 40 L375 35 L385 35" 
+                  fill="none" stroke="url(#pulseGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
+            </path>
+            
+            <!-- Version badge -->
+            <rect x="340" y="55" width="45" height="18" rx="9" fill="url(#pulseGrad)"/>
+            <text x="362" y="68" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#1E3A5F" text-anchor="middle">v2.0</text>
+        </svg>
+    </div>
+    """
+    st.markdown(logo_html, unsafe_allow_html=True)
+
+
+def render_sidebar_logo():
+    """Render smaller logo for sidebar"""
+    sidebar_logo = """
+    <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 1rem; padding: 10px;">
+        <svg width="200" height="60" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <linearGradient id="sbBgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" style="stop-color:#1E3A5F;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#2E5A8F;stop-opacity:1" />
+                </linearGradient>
+                <linearGradient id="sbPulseGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#00D4AA;stop-opacity:1" />
+                    <stop offset="100%" style="stop-color:#00F5CC;stop-opacity:1" />
+                </linearGradient>
+            </defs>
+            <rect x="2" y="5" width="196" height="50" rx="10" fill="url(#sbBgGrad)"/>
+            <circle cx="35" cy="30" r="18" fill="rgba(255,255,255,0.1)" stroke="url(#sbPulseGrad)" stroke-width="2"/>
+            <text x="60" y="28" font-family="Arial Black, sans-serif" font-size="12" font-weight="900" fill="#FFFFFF">UAE</text>
+            <text x="90" y="28" font-family="Arial Black, sans-serif" font-size="12" font-weight="900" fill="url(#sbPulseGrad)">PROMO</text>
+            <text x="60" y="43" font-family="Arial Black, sans-serif" font-size="12" font-weight="900" fill="#FFFFFF">PULSE</text>
+            <text x="105" y="43" font-family="Arial, sans-serif" font-size="8" fill="rgba(255,255,255,0.7)">v2.0</text>
+            <!-- Cart icon -->
+            <path d="M28 22 L30 22 L33 32 L42 32 L44 25 L31 25" fill="none" stroke="url(#sbPulseGrad)" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="34" cy="36" r="2" fill="url(#sbPulseGrad)"/>
+            <circle cx="40" cy="36" r="2" fill="url(#sbPulseGrad)"/>
+            <!-- Pulse -->
+            <path d="M160 25 L165 25 L168 18 L172 32 L176 22 L180 28 L185 25 L190 25" 
+                  fill="none" stroke="url(#sbPulseGrad)" stroke-width="1.5" stroke-linecap="round">
+                <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
+            </path>
+        </svg>
+    </div>
+    """
+    st.sidebar.markdown(sidebar_logo, unsafe_allow_html=True)
+
+
+# Custom CSS
 st.markdown("""
 <style>
-    .main-header {font-size: 2.5rem; font-weight: bold; color: #1E3A5F; text-align: center; margin-bottom: 0.5rem;}
-    .sub-header {font-size: 1rem; color: #666; text-align: center; margin-bottom: 1.5rem;}
+    .main-header {font-size: 1.2rem; color: #666; text-align: center; margin-bottom: 1.5rem; margin-top: -0.5rem;}
     .insight-box {background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 1rem 1.2rem; border-radius: 10px; color: white; margin: 0.5rem 0 1.5rem 0; font-size: 0.9rem; line-height: 1.6;}
     .insight-success {background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);}
     .insight-warning {background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);}
     .insight-title {font-weight: bold; font-size: 1rem; margin-bottom: 0.5rem;}
     .insight-detail {font-size: 0.85rem; margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.3);}
+    .stApp > header {background-color: transparent;}
+    .block-container {padding-top: 1rem;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -69,7 +181,11 @@ def add_defaults(df, dtype):
         if 'lead_time_days' not in df.columns: df['lead_time_days'] = 7
     return df
 
-# Sidebar
+# ============================================================================
+# SIDEBAR
+# ============================================================================
+render_sidebar_logo()
+
 st.sidebar.markdown("## 🎛️ Controls")
 view = st.sidebar.radio("View", ["Executive", "Manager"])
 
@@ -170,9 +286,11 @@ sim = {
     'simulation_days': st.sidebar.selectbox("Days", [7, 14], index=1)
 }
 
-# Main Content
-st.markdown('<p class="main-header">🛒 UAE Promo Pulse Simulator</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-header">Advanced Retail Analytics Dashboard</p>', unsafe_allow_html=True)
+# ============================================================================
+# MAIN CONTENT
+# ============================================================================
+render_logo()
+st.markdown('<p class="main-header">Advanced Retail Analytics & Promotion Simulator for UAE Market</p>', unsafe_allow_html=True)
 
 if not st.session_state.data_loaded:
     st.markdown("---")
@@ -186,7 +304,6 @@ if not st.session_state.data_loaded:
             **Inventory:** snapshot_date, product_id, store_id, stock_on_hand
             """)
             
-            # Sample templates
             cols = st.columns(4)
             with cols[0]:
                 st.download_button("📦 Products", pd.DataFrame({'product_id': ['PROD_0001'], 'category': ['Electronics'], 'base_price_aed': [1500], 'unit_cost_aed': [900]}).to_csv(index=False), "products_template.csv")
@@ -200,6 +317,51 @@ if not st.session_state.data_loaded:
         st.success("✅ Raw data ready! Click 'Clean Data'")
     else:
         st.info("👈 Generate or upload data to start")
+        
+        # Feature showcase with logo theme
+        st.markdown("---")
+        st.markdown("### 🚀 Dashboard Features")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1E3A5F 0%, #2E5A8F 100%); padding: 1.5rem; border-radius: 10px; color: white; height: 200px;">
+                <h4 style="color: #00D4AA;">📊 Analytics</h4>
+                <ul style="font-size: 0.85rem;">
+                    <li>14+ Interactive Charts</li>
+                    <li>Real-time KPI Tracking</li>
+                    <li>Trend Analysis</li>
+                    <li>Pareto Analysis</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1E3A5F 0%, #2E5A8F 100%); padding: 1.5rem; border-radius: 10px; color: white; height: 200px;">
+                <h4 style="color: #00D4AA;">🎯 Simulation</h4>
+                <ul style="font-size: 0.85rem;">
+                    <li>What-If Scenarios</li>
+                    <li>Promotion Planning</li>
+                    <li>Margin Optimization</li>
+                    <li>Risk Assessment</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #1E3A5F 0%, #2E5A8F 100%); padding: 1.5rem; border-radius: 10px; color: white; height: 200px;">
+                <h4 style="color: #00D4AA;">💡 Insights</h4>
+                <ul style="font-size: 0.85rem;">
+                    <li>Business Recommendations</li>
+                    <li>Actionable Insights</li>
+                    <li>Data Quality Reports</li>
+                    <li>Export Reports</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+
 else:
     data = st.session_state.data
     kpi_calc = KPICalculator(data['sales'], data['products'], data['stores'], data['inventory'])
@@ -242,14 +404,14 @@ else:
         ps = ps.merge(data['products'][['product_id', 'category']], on='product_id', how='left')
         ps = ps.sort_values('revenue', ascending=False).reset_index(drop=True)
         total = ps['revenue'].sum()
-        ps['cum_pct'] = ps['revenue'].cumsum() / total * 100
+        ps['cum_pct'] = ps['revenue'].cumsum() / total * 100 if total > 0 else 0
         ps['rank'] = range(1, len(ps) + 1)
         
         fig = make_subplots(specs=[[{"secondary_y": True}]])
-        fig.add_trace(go.Bar(x=ps['rank'].head(50), y=ps['revenue'].head(50), name='Revenue', marker_color='steelblue'), secondary_y=False)
-        fig.add_trace(go.Scatter(x=ps['rank'].head(50), y=ps['cum_pct'].head(50), name='Cumulative %', line=dict(color='red', width=2)), secondary_y=True)
-        fig.add_hline(y=80, line_dash="dash", line_color="green", secondary_y=True)
-        fig.update_layout(height=350, legend=dict(orientation="h", y=1.1))
+        fig.add_trace(go.Bar(x=ps['rank'].head(50), y=ps['revenue'].head(50), name='Revenue', marker_color='#1E3A5F'), secondary_y=False)
+        fig.add_trace(go.Scatter(x=ps['rank'].head(50), y=ps['cum_pct'].head(50), name='Cumulative %', line=dict(color='#00D4AA', width=3)), secondary_y=True)
+        fig.add_hline(y=80, line_dash="dash", line_color="#f5576c", secondary_y=True)
+        fig.update_layout(height=350, legend=dict(orientation="h", y=1.1), plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
         
         p80 = len(ps[ps['cum_pct'] <= 80])
@@ -268,8 +430,9 @@ else:
         pa = pa.merge(data['products'][['product_id', 'category']], on='product_id', how='left')
         
         fig = px.scatter(pa, x='selling_price_aed', y='qty', color='category', size='discount_pct',
-                        labels={'selling_price_aed': 'Price', 'qty': 'Quantity'})
-        fig.update_layout(height=350)
+                        labels={'selling_price_aed': 'Price', 'qty': 'Quantity'},
+                        color_discrete_sequence=px.colors.qualitative.Set2)
+        fig.update_layout(height=350, plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
         
         corr = pa['selling_price_aed'].corr(pa['qty'])
@@ -296,10 +459,10 @@ else:
             pred = [df['ma7'].iloc[-1] + trend * i for i in range(1, 15)]
             
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df['date'], y=df['revenue'], name='Historical', line=dict(color='steelblue')))
-            fig.add_trace(go.Scatter(x=df['date'], y=df['ma7'], name='7-Day MA', line=dict(color='orange', dash='dot')))
-            fig.add_trace(go.Scatter(x=future, y=pred, name='Forecast', line=dict(color='red', dash='dash')))
-            fig.update_layout(height=350, legend=dict(orientation="h", y=1.1))
+            fig.add_trace(go.Scatter(x=df['date'], y=df['revenue'], name='Historical', line=dict(color='#1E3A5F', width=2)))
+            fig.add_trace(go.Scatter(x=df['date'], y=df['ma7'], name='7-Day MA', line=dict(color='#00D4AA', dash='dot', width=2)))
+            fig.add_trace(go.Scatter(x=future, y=pred, name='Forecast', line=dict(color='#f5576c', dash='dash', width=2)))
+            fig.update_layout(height=350, legend=dict(orientation="h", y=1.1), plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, use_container_width=True)
             
             detailed_insight("Forecast Analysis",
@@ -314,9 +477,9 @@ else:
         st.markdown("#### 📉 Revenue vs Orders")
         if len(daily) > 0:
             fig = make_subplots(specs=[[{"secondary_y": True}]])
-            fig.add_trace(go.Bar(x=daily['date'], y=daily['revenue'], name='Revenue', marker_color='steelblue', opacity=0.7), secondary_y=False)
-            fig.add_trace(go.Scatter(x=daily['date'], y=daily['orders'], name='Orders', line=dict(color='red', width=2)), secondary_y=True)
-            fig.update_layout(height=350, legend=dict(orientation="h", y=1.1))
+            fig.add_trace(go.Bar(x=daily['date'], y=daily['revenue'], name='Revenue', marker_color='#1E3A5F', opacity=0.7), secondary_y=False)
+            fig.add_trace(go.Scatter(x=daily['date'], y=daily['orders'], name='Orders', line=dict(color='#00D4AA', width=3)), secondary_y=True)
+            fig.update_layout(height=350, legend=dict(orientation="h", y=1.1), plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, use_container_width=True)
             
             corr = daily['revenue'].corr(daily['orders'])
@@ -337,10 +500,10 @@ else:
             orientation="v", measure=["absolute", "relative", "relative", "relative", "total"],
             x=["Gross", "Refunds", "Returns", "COGS", "Profit"],
             y=[kpis['gross_revenue'], -kpis['refund_amount'], -ret_amt, -kpis['cogs'], 0],
-            decreasing={"marker": {"color": "#ef553b"}}, increasing={"marker": {"color": "#00cc96"}},
-            totals={"marker": {"color": "#636efa"}}
+            decreasing={"marker": {"color": "#f5576c"}}, increasing={"marker": {"color": "#00D4AA"}},
+            totals={"marker": {"color": "#1E3A5F"}}
         ))
-        fig.update_layout(height=350)
+        fig.update_layout(height=350, plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
         
         profit_pct = (kpis['gross_margin'] / kpis['gross_revenue'] * 100) if kpis['gross_revenue'] > 0 else 0
@@ -355,7 +518,8 @@ else:
         st.markdown("#### 🍩 Revenue by City")
         cbd = kpi_calc.compute_breakdown(fdf, 'city')
         if len(cbd) > 0:
-            fig = go.Figure(data=[go.Pie(labels=cbd['city'], values=cbd['revenue'], hole=0.5)])
+            fig = go.Figure(data=[go.Pie(labels=cbd['city'], values=cbd['revenue'], hole=0.5,
+                                        marker=dict(colors=['#1E3A5F', '#00D4AA', '#f5576c', '#667eea']))])
             fig.update_layout(height=350)
             st.plotly_chart(fig, use_container_width=True)
             
@@ -379,8 +543,8 @@ else:
         sample = df_out.sample(min(2000, len(df_out)))
         
         fig = px.scatter(sample, x='qty', y='selling_price_aed', color='outlier',
-                        color_discrete_map={True: 'red', False: 'steelblue'}, opacity=0.6)
-        fig.update_layout(height=350)
+                        color_discrete_map={True: '#f5576c', False: '#1E3A5F'}, opacity=0.6)
+        fig.update_layout(height=350, plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
         
         cnt = df_out['outlier'].sum()
@@ -401,11 +565,11 @@ else:
             df_gr['ma7'] = df_gr['revenue'].rolling(7, min_periods=1).mean()
             
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4])
-            fig.add_trace(go.Scatter(x=df_gr['date'], y=df_gr['revenue'], name='Revenue', line=dict(color='lightblue')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_gr['date'], y=df_gr['ma7'], name='MA7', line=dict(color='steelblue')), row=1, col=1)
-            colors = ['green' if g > 0 else 'red' for g in df_gr['growth'].fillna(0)]
+            fig.add_trace(go.Scatter(x=df_gr['date'], y=df_gr['revenue'], name='Revenue', line=dict(color='#a8d5e5')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_gr['date'], y=df_gr['ma7'], name='MA7', line=dict(color='#1E3A5F', width=2)), row=1, col=1)
+            colors = ['#00D4AA' if g > 0 else '#f5576c' for g in df_gr['growth'].fillna(0)]
             fig.add_trace(go.Bar(x=df_gr['date'], y=df_gr['growth'], marker_color=colors, showlegend=False), row=2, col=1)
-            fig.update_layout(height=380, legend=dict(orientation="h", y=1.1))
+            fig.update_layout(height=380, legend=dict(orientation="h", y=1.1), plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, use_container_width=True)
             
             avg = df_gr['growth'].mean()
@@ -433,10 +597,10 @@ else:
         pp.loc[(pp['revenue'] > med_r) & (pp['margin_pct'] <= med_m), 'quad'] = 'Cash Cows'
         
         fig = px.scatter(pp, x='revenue', y='margin_pct', color='quad',
-                        color_discrete_map={'Stars': 'gold', 'Cash Cows': 'green', 'Question': 'blue', 'Dogs': 'red'})
+                        color_discrete_map={'Stars': '#FFD700', 'Cash Cows': '#00D4AA', 'Question': '#667eea', 'Dogs': '#f5576c'})
         fig.add_hline(y=med_m, line_dash="dash", line_color="gray")
         fig.add_vline(x=med_r, line_dash="dash", line_color="gray")
-        fig.update_layout(height=350)
+        fig.update_layout(height=350, plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
         
         counts = pp['quad'].value_counts()
@@ -459,13 +623,14 @@ else:
         pm['score'] = (pm['revenue_n'] * 0.5 + pm['margin_pct_n'] * 0.5) * 100
         
         top = pm.nlargest(15, 'score')
-        fig = px.bar(top, x='product_id', y='score', color='category')
-        fig.update_layout(height=350, xaxis_tickangle=-45)
+        fig = px.bar(top, x='product_id', y='score', color='category',
+                    color_discrete_sequence=['#1E3A5F', '#00D4AA', '#667eea', '#f5576c', '#FFD700', '#a8d5e5'])
+        fig.update_layout(height=350, xaxis_tickangle=-45, plot_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
         
         detailed_insight("Priority Algorithm",
             "Score = 50% Revenue + 50% Margin",
-            [f"Top category: {top['category'].value_counts().index[0]}", f"Highest score: {top['score'].max():.1f}"],
+            [f"Top category: {top['category'].value_counts().index[0] if len(top) > 0 else 'N/A'}", f"Highest score: {top['score'].max():.1f}" if len(top) > 0 else "N/A"],
             ["Focus on top 15 products", "Ensure 99% availability"],
             "success")
     
@@ -479,11 +644,12 @@ else:
         pivot = df_m.groupby(['city', 'channel'])['revenue'].sum().reset_index().pivot(index='city', columns='channel', values='revenue').fillna(0)
         
         fig = go.Figure(data=go.Heatmap(z=pivot.values, x=pivot.columns.tolist(), y=pivot.index.tolist(),
-                                        colorscale='Viridis', text=[[f'{v:,.0f}' for v in row] for row in pivot.values], texttemplate='%{text}'))
+                                        colorscale=[[0, '#1E3A5F'], [0.5, '#00D4AA'], [1, '#FFD700']],
+                                        text=[[f'{v:,.0f}' for v in row] for row in pivot.values], texttemplate='%{text}'))
         fig.update_layout(height=350)
         st.plotly_chart(fig, use_container_width=True)
         
-        best = pivot.stack().idxmax()
+        best = pivot.stack().idxmax() if len(pivot) > 0 else ("N/A", "N/A")
         detailed_insight("Performance Matrix",
             f"Best: <strong>{best[0]} × {best[1]}</strong>",
             [f"Channels: {len(pivot.columns)}", f"Cities: {len(pivot.index)}"],
@@ -508,7 +674,7 @@ else:
         fig.update_layout(height=350)
         st.plotly_chart(fig, use_container_width=True)
         
-        max_p = max(max(row) for row in matrix)
+        max_p = max(max(row) for row in matrix) if matrix else 0
         detailed_insight("Scenario Analysis",
             f"Max profit: <strong>AED {max_p:,.0f}</strong>",
             ["Green = profit", "Red = loss", "Find optimal combo"],
@@ -531,11 +697,12 @@ else:
         days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
         pivot_s = pivot_s.reindex([d for d in days if d in pivot_s.index])
         
-        fig = go.Figure(data=go.Heatmap(z=pivot_s.values, x=pivot_s.columns.tolist(), y=pivot_s.index.tolist(), colorscale='Blues'))
+        fig = go.Figure(data=go.Heatmap(z=pivot_s.values, x=pivot_s.columns.tolist(), y=pivot_s.index.tolist(),
+                                        colorscale=[[0, '#f8f9fa'], [0.5, '#00D4AA'], [1, '#1E3A5F']]))
         fig.update_layout(height=350)
         st.plotly_chart(fig, use_container_width=True)
         
-        if len(pivot_s) > 0:
+        if len(pivot_s) > 0 and pivot_s.values.size > 0:
             max_idx = np.unravel_index(np.argmax(pivot_s.values), pivot_s.values.shape)
             peak_day = pivot_s.index[max_idx[0]]
             peak_hour = pivot_s.columns[max_idx[1]]
@@ -549,15 +716,16 @@ else:
         st.markdown("#### 📊 Category Margins")
         catbd = kpi_calc.compute_breakdown(fdf, 'category')
         if len(catbd) > 0:
-            fig = px.bar(catbd, x='category', y='margin_pct', color='margin_pct', color_continuous_scale='RdYlGn')
-            fig.add_hline(y=sim['margin_floor'], line_dash="dash", line_color="red")
-            fig.update_layout(height=350)
+            fig = px.bar(catbd, x='category', y='margin_pct', color='margin_pct',
+                        color_continuous_scale=[[0, '#f5576c'], [0.5, '#FFD700'], [1, '#00D4AA']])
+            fig.add_hline(y=sim['margin_floor'], line_dash="dash", line_color="#f5576c")
+            fig.update_layout(height=350, plot_bgcolor='rgba(0,0,0,0)')
             st.plotly_chart(fig, use_container_width=True)
             
             low = catbd[catbd['margin_pct'] < sim['margin_floor']]['category'].tolist()
             detailed_insight("Category Health",
                 f"Avg margin: <strong>{catbd['margin_pct'].mean():.1f}%</strong>",
-                [f"Below floor: {', '.join(low) if low else 'None'}", f"Best: {catbd.iloc[catbd['margin_pct'].argmax()]['category']}"],
+                [f"Below floor: {', '.join(low) if low else 'None'}", f"Best: {catbd.iloc[catbd['margin_pct'].argmax()]['category']}" if len(catbd) > 0 else "N/A"],
                 ["Review pricing for low-margin categories" if low else "All healthy", "Expand high-margin categories"],
                 "warning" if low else "success")
     
@@ -585,5 +753,20 @@ else:
     with cols[3]:
         if sim_res['top_risk_items'] is not None: st.download_button("📄 Risk", sim_res['top_risk_items'].to_csv(index=False), "risk.csv")
 
+# Footer with mini logo
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: #888;'>UAE Promo Pulse v2.0</p>", unsafe_allow_html=True)
+st.markdown("""
+<div style="display: flex; justify-content: center; align-items: center; padding: 1rem;">
+    <svg width="150" height="40" viewBox="0 0 150 40" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <linearGradient id="footerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" style="stop-color:#00D4AA;stop-opacity:1" />
+                <stop offset="100%" style="stop-color:#00F5CC;stop-opacity:1" />
+            </linearGradient>
+        </defs>
+        <text x="10" y="25" font-family="Arial, sans-serif" font-size="12" fill="#888">UAE</text>
+        <text x="40" y="25" font-family="Arial, sans-serif" font-size="12" fill="url(#footerGrad)">PROMO PULSE</text>
+        <text x="130" y="25" font-family="Arial, sans-serif" font-size="10" fill="#888">v2.0</text>
+    </svg>
+</div>
+""", unsafe_allow_html=True)
