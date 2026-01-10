@@ -327,4 +327,172 @@ class PromoSimulator:
         
         margin_pct = (total_margin / total_revenue * 100) if total_revenue > 0 else 0
         profit_proxy = total_margin - total_promo_cost
-        budget_utilization = (total_pr
+        budget_utilization = (total_promo_cost / promo_budget * 100) if promo_budget > 0 else 0
+        
+        # Check stockout risk
+        sim_data['demand_vs_stock'] = sim_data['sim_total_demand'] / sim_data['stock_on_hand'].replace(0, 0.001)
+        sim_data['stockout_risk'] = sim_data['demand_vs_stock'] > 0.8
+        stockout_risk_pct = (sim_data['stockout_risk'].sum() / len(sim_data) * 100) if len(sim_data) > 0 else 0
+        
+        # Check constraint violations
+        violations = []
+        
+        # Budget constraint
+        if total_promo_cost > promo_budget:
+            violations.append({
+                'constraint': 'BUDGET_EXCEEDED',
+                'message': f'Promo spend ({total_promo_cost:,.0f} AED) exceeds budget ({promo_budget:,.0f} AED)',
+                'severity': 'HIGH',
+                'excess': total_promo_cost - promo_budget
+            })
+        
+        # Margin floor constraint
+        if margin_pct < margin_floor:
+            violations.append({
+                'constraint': 'MARGIN_BELOW_FLOOR',
+                'message': f'Gross margin ({margin_pct:.1f}%) is below floor ({margin_floor}%)',
+                'severity': 'HIGH',
+                'shortfall': margin_floor - margin_pct
+            })
+        
+        # Stock constraint (informational)
+        stock_limited = sim_data[sim_data['sim_total_demand'] > sim_data['stock_on_hand']]
+        if len(stock_limited) > 0:
+            violations.append({
+                'constraint': 'STOCK_LIMITED',
+                'message': f'{len(stock_limited)} product-store combinations are stock-limited',
+                'severity': 'MEDIUM',
+                'affected_count': len(stock_limited)
+            })
+        
+        # Top risk items
+        top_stockout_risk = sim_data.nlargest(10, 'demand_vs_stock')[
+            ['product_id', 'store_id', 'category', 'stock_on_hand', 'sim_total_demand', 'demand_vs_stock']
+        ].copy()
+        top_stockout_risk['demand_vs_stock'] = (top_stockout_risk['demand_vs_stock'] * 100).round(1)
+        top_stockout_risk.columns = ['Product', 'Store', 'Category', 'Stock', 'Projected Demand', 'Risk %']
+        
+        # Results summary
+        results = {
+            'total_revenue': round(total_revenue, 2),
+            'total_cost': round(total_cost, 2),
+            'total_margin': round(total_margin, 2),
+            'margin_pct': round(margin_pct, 2),
+            'promo_spend': round(total_promo_cost, 2),
+            'profit_proxy': round(profit_proxy, 2),
+            'budget_utilization': round(budget_utilization, 2),
+            'total_units': int(total_qty),
+            'stockout_risk_pct': round(stockout_risk_pct, 2),
+            'high_risk_skus': int(sim_data['stockout_risk'].sum()),
+            'simulation_days': simulation_days,
+            'discount_pct': discount_pct,
+            'promo_budget': promo_budget,
+            'margin_floor': margin_floor
+        }
+        
+        return {
+            'success': len([v for v in violations if v['severity'] == 'HIGH']) == 0,
+            'message': 'Simulation completed' + (' with violations' if violations else ' successfully'),
+            'results': results,
+            'violations': violations,
+            'detail_data': sim_data,
+            'top_risk_items': top_stockout_risk
+        }
+    
+    def run_scenario_comparison(self, discount_levels, promo_budget, margin_floor, 
+                                 simulation_days=14, city=None, channel=None, category=None):
+        """Run multiple scenarios for comparison"""
+        
+        scenarios = []
+        for discount in discount_levels:
+            result = self.run_simulation(
+                discount, promo_budget, margin_floor, 
+                simulation_days, city, channel, category
+            )
+            if result['results']:
+                scenarios.append({
+                    'discount_pct': discount,
+                    'revenue': result['results']['total_revenue'],
+                    'margin': result['results']['total_margin'],
+                    'margin_pct': result['results']['margin_pct'],
+                    'profit_proxy': result['results']['profit_proxy'],
+                    'promo_spend': result['results']['promo_spend'],
+                    'stockout_risk': result['results']['stockout_risk_pct'],
+                    'feasible': result['success']
+                })
+        
+        return pd.DataFrame(scenarios)
+
+
+def generate_recommendation(kpis, sim_results, violations):
+    """Generate auto-recommendation text based on KPIs and simulation"""
+    
+    recommendations = []
+    
+    # Check margin health
+    if kpis['gross_margin_pct'] < 20:
+        recommendations.append("⚠️ Current gross margin is below 20%. Consider reducing discount depth.")
+    elif kpis['gross_margin_pct'] > 35:
+        recommendations.append("✅ Healthy gross margin allows room for promotional activity.")
+    
+    # Check simulation results
+    if sim_results:
+        if sim_results['margin_pct'] < sim_results.get('margin_floor', 15):
+            recommendations.append(f"🚫 Simulated margin ({sim_results['margin_pct']:.1f}%) is below target. Reduce discount or narrow scope.")
+        
+        if sim_results['budget_utilization'] > 100:
+            recommendations.append(f"🚫 Budget exceeded by {sim_results['budget_utilization'] - 100:.1f}%. Scale back promotion.")
+        elif sim_results['budget_utilization'] < 50:
+            recommendations.append(f"💡 Only {sim_results['budget_utilization']:.1f}% budget utilized. Consider expanding promotion scope.")
+        
+        if sim_results['stockout_risk_pct'] > 30:
+            recommendations.append(f"⚠️ High stockout risk ({sim_results['stockout_risk_pct']:.1f}%). Review inventory for high-demand items.")
+        
+        if sim_results['profit_proxy'] > 0:
+            recommendations.append(f"✅ Positive profit proxy ({sim_results['profit_proxy']:,.0f} AED). Promotion is financially viable.")
+        else:
+            recommendations.append(f"🚫 Negative profit proxy ({sim_results['profit_proxy']:,.0f} AED). Promotion may not be profitable.")
+    
+    # Check violations
+    high_violations = [v for v in violations if v.get('severity') == 'HIGH']
+    if high_violations:
+        recommendations.append(f"❌ {len(high_violations)} critical constraint violation(s). Address before proceeding.")
+    
+    if not recommendations:
+        recommendations.append("✅ All metrics within acceptable ranges. Promotion can proceed.")
+    
+    return recommendations
+
+
+if __name__ == "__main__":
+    # Test with sample data
+    import os
+    
+    if os.path.exists('data/cleaned'):
+        sales = pd.read_csv('data/cleaned/sales_cleaned.csv')
+        products = pd.read_csv('data/cleaned/products_cleaned.csv')
+        stores = pd.read_csv('data/cleaned/stores_cleaned.csv')
+        inventory = pd.read_csv('data/cleaned/inventory_cleaned.csv')
+        
+        # Test KPI Calculator
+        kpi_calc = KPICalculator(sales, products, stores, inventory)
+        kpis = kpi_calc.compute_historical_kpis()
+        print("\nHistorical KPIs:")
+        for k, v in kpis.items():
+            print(f"  {k}: {v}")
+        
+        # Test Simulator
+        sim = PromoSimulator(sales, products, stores, inventory)
+        result = sim.run_simulation(
+            discount_pct=15,
+            promo_budget=50000,
+            margin_floor=15,
+            simulation_days=14
+        )
+        print("\nSimulation Results:")
+        print(f"  Success: {result['success']}")
+        if result['results']:
+            for k, v in result['results'].items():
+                print(f"  {k}: {v}")
+    else:
+        print("Run data_generator.py and cleaner.py first!")
