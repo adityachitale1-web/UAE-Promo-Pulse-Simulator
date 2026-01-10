@@ -12,7 +12,6 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import os
 
-# Import custom modules
 from data_generator import generate_all_data
 from cleaner import DataCleaner
 from simulator import KPICalculator, PromoSimulator, generate_recommendation
@@ -47,34 +46,31 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
     }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1rem;
-        border-radius: 10px;
-        color: white;
-    }
     .stMetric {
         background-color: #f0f2f6;
         padding: 1rem;
         border-radius: 10px;
     }
-    .recommendation-box {
+    .stats-box {
         background-color: #e8f4f8;
         padding: 1rem;
         border-radius: 10px;
         border-left: 4px solid #1E88E5;
-    }
-    .violation-box {
-        background-color: #ffebee;
-        padding: 1rem;
-        border-radius: 10px;
-        border-left: 4px solid #e53935;
+        margin: 0.5rem 0;
     }
     .success-box {
         background-color: #e8f5e9;
         padding: 1rem;
         border-radius: 10px;
         border-left: 4px solid #43a047;
+        margin: 0.5rem 0;
+    }
+    .warning-box {
+        background-color: #fff3e0;
+        padding: 1rem;
+        border-radius: 10px;
+        border-left: 4px solid #ff9800;
+        margin: 0.5rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -87,6 +83,12 @@ if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'data' not in st.session_state:
     st.session_state.data = None
+if 'raw_data' not in st.session_state:
+    st.session_state.raw_data = None
+if 'raw_data_generated' not in st.session_state:
+    st.session_state.raw_data_generated = False
+if 'cleaning_stats' not in st.session_state:
+    st.session_state.cleaning_stats = None
 
 # ============================================================================
 # DATA LOADING FUNCTIONS
@@ -96,7 +98,6 @@ if 'data' not in st.session_state:
 def load_data_from_files(raw_dir='data/raw', cleaned_dir='data/cleaned'):
     """Load data from CSV files"""
     try:
-        # Try loading cleaned data first
         if os.path.exists(cleaned_dir):
             sales = pd.read_csv(f'{cleaned_dir}/sales_cleaned.csv')
             products = pd.read_csv(f'{cleaned_dir}/products_cleaned.csv')
@@ -114,16 +115,29 @@ def load_data_from_files(raw_dir='data/raw', cleaned_dir='data/cleaned'):
             }
     except Exception as e:
         st.error(f"Error loading data: {e}")
-    
     return None
 
 
-def generate_and_clean_data():
-    """Generate synthetic data and clean it"""
-    with st.spinner("Generating synthetic data..."):
+def generate_raw_data():
+    """Generate synthetic raw data only"""
+    with st.spinner("🔄 Generating synthetic raw data..."):
         raw_data = generate_all_data('data/raw')
-    
-    with st.spinner("Cleaning data..."):
+    return raw_data
+
+
+def clean_data(raw_data):
+    """Clean the raw data and return cleaning statistics"""
+    with st.spinner("🧹 Cleaning data..."):
+        # Store original counts
+        original_counts = {
+            'products': len(raw_data['products']),
+            'stores': len(raw_data['stores']),
+            'sales': len(raw_data['sales']),
+            'inventory': len(raw_data['inventory']),
+            'campaigns': len(raw_data['campaigns'])
+        }
+        
+        # Clean the data
         cleaner = DataCleaner()
         cleaned_data = cleaner.clean_all(
             raw_data['products'],
@@ -132,8 +146,37 @@ def generate_and_clean_data():
             raw_data['inventory'],
             'data/cleaned'
         )
-    
-    return cleaned_data
+        
+        # Calculate cleaned counts
+        cleaned_counts = {
+            'products': len(cleaned_data['products']),
+            'stores': len(cleaned_data['stores']),
+            'sales': len(cleaned_data['sales']),
+            'inventory': len(cleaned_data['inventory'])
+        }
+        
+        # Calculate removed counts
+        removed_counts = {
+            'products': original_counts['products'] - cleaned_counts['products'],
+            'stores': original_counts['stores'] - cleaned_counts['stores'],
+            'sales': original_counts['sales'] - cleaned_counts['sales'],
+            'inventory': original_counts['inventory'] - cleaned_counts['inventory']
+        }
+        
+        # Get issues summary
+        issues_summary = {}
+        if len(cleaned_data['issues']) > 0:
+            issues_summary = cleaned_data['issues']['issue_type'].value_counts().to_dict()
+        
+        cleaning_stats = {
+            'original': original_counts,
+            'cleaned': cleaned_counts,
+            'removed': removed_counts,
+            'issues_summary': issues_summary,
+            'total_issues': len(cleaned_data['issues'])
+        }
+        
+        return cleaned_data, cleaning_stats
 
 
 def process_uploaded_file(uploaded_file, file_type):
@@ -146,6 +189,108 @@ def process_uploaded_file(uploaded_file, file_type):
     except Exception as e:
         st.error(f"Error reading {file_type}: {e}")
     return None
+
+
+# ============================================================================
+# CLEANING STATS DISPLAY COMPONENT
+# ============================================================================
+
+def display_cleaning_stats(stats):
+    """Display cleaning statistics in a nice format"""
+    if stats is None:
+        return
+    
+    st.markdown("### 📊 Data Cleaning Statistics")
+    
+    # Create columns for the stats table
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown("**📁 Table**")
+        for table in ['products', 'stores', 'sales', 'inventory']:
+            st.markdown(f"`{table}`")
+    
+    with col2:
+        st.markdown("**📥 Original Records**")
+        for table in ['products', 'stores', 'sales', 'inventory']:
+            st.markdown(f"**{stats['original'][table]:,}**")
+    
+    with col3:
+        st.markdown("**🗑️ Records Removed**")
+        for table in ['products', 'stores', 'sales', 'inventory']:
+            removed = stats['removed'][table]
+            if removed > 0:
+                st.markdown(f"<span style='color: red;'>-{removed:,}</span>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<span style='color: green;'>0</span>", unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown("**✅ Clean Records**")
+        for table in ['products', 'stores', 'sales', 'inventory']:
+            st.markdown(f"**{stats['cleaned'][table]:,}**")
+    
+    # Summary metrics
+    st.markdown("---")
+    
+    total_original = sum(stats['original'].values())
+    total_cleaned = sum(stats['cleaned'].values())
+    total_removed = sum(stats['removed'].values())
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "Total Original Records",
+            f"{total_original:,}"
+        )
+    
+    with col2:
+        st.metric(
+            "Total Records Removed",
+            f"{total_removed:,}",
+            delta=f"-{total_removed:,}" if total_removed > 0 else "0",
+            delta_color="inverse"
+        )
+    
+    with col3:
+        st.metric(
+            "Total Clean Records",
+            f"{total_cleaned:,}"
+        )
+    
+    with col4:
+        st.metric(
+            "Total Issues Logged",
+            f"{stats['total_issues']:,}"
+        )
+    
+    # Issues breakdown
+    if stats['issues_summary']:
+        st.markdown("---")
+        st.markdown("### 🔍 Issues Breakdown by Type")
+        
+        issues_df = pd.DataFrame([
+            {'Issue Type': k, 'Count': v} 
+            for k, v in stats['issues_summary'].items()
+        ]).sort_values('Count', ascending=False)
+        
+        col1, col2 = st.columns([1, 2])
+        
+        with col1:
+            st.dataframe(issues_df, use_container_width=True, hide_index=True)
+        
+        with col2:
+            fig = px.bar(
+                issues_df, 
+                x='Issue Type', 
+                y='Count',
+                color='Count',
+                color_continuous_scale='Reds',
+                title='Issues by Type'
+            )
+            fig.update_layout(height=300, xaxis_tickangle=-45)
+            st.plotly_chart(fig, use_container_width=True)
+
 
 # ============================================================================
 # SIDEBAR
@@ -169,14 +314,59 @@ def render_sidebar():
     st.sidebar.markdown("### 📊 Data Source")
     data_source = st.sidebar.radio(
         "Select data source:",
-        ["Generate New Data", "Load Existing Data", "Upload Custom Data"]
+        ["Generate & Clean Data", "Load Existing Data", "Upload Custom Data"]
     )
     
-    if data_source == "Generate New Data":
-        if st.sidebar.button("🔄 Generate & Clean Data", use_container_width=True):
-            st.session_state.data = generate_and_clean_data()
-            st.session_state.data_loaded = True
+    if data_source == "Generate & Clean Data":
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("#### Step 1: Generate Raw Data")
+        
+        # Generate Data Button
+        if st.sidebar.button("🎲 Generate Raw Data", use_container_width=True):
+            st.session_state.raw_data = generate_raw_data()
+            st.session_state.raw_data_generated = True
+            st.session_state.data_loaded = False
+            st.session_state.cleaning_stats = None
             st.rerun()
+        
+        # Show status of raw data
+        if st.session_state.raw_data_generated and st.session_state.raw_data is not None:
+            st.sidebar.success("✅ Raw data generated!")
+            st.sidebar.markdown(f"""
+            **Raw Data Summary:**
+            - Products: {len(st.session_state.raw_data['products']):,}
+            - Stores: {len(st.session_state.raw_data['stores']):,}
+            - Sales: {len(st.session_state.raw_data['sales']):,}
+            - Inventory: {len(st.session_state.raw_data['inventory']):,}
+            - Campaigns: {len(st.session_state.raw_data['campaigns']):,}
+            """)
+        else:
+            st.sidebar.info("⏳ No raw data generated yet")
+        
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("#### Step 2: Clean Data")
+        
+        # Clean Data Button (only enabled if raw data exists)
+        clean_button_disabled = not st.session_state.raw_data_generated
+        
+        if st.sidebar.button(
+            "🧹 Clean Data", 
+            use_container_width=True, 
+            disabled=clean_button_disabled
+        ):
+            if st.session_state.raw_data is not None:
+                cleaned_data, cleaning_stats = clean_data(st.session_state.raw_data)
+                st.session_state.data = cleaned_data
+                st.session_state.cleaning_stats = cleaning_stats
+                st.session_state.data_loaded = True
+                st.rerun()
+        
+        if clean_button_disabled:
+            st.sidebar.warning("⚠️ Generate raw data first!")
+        
+        # Show status of cleaned data
+        if st.session_state.data_loaded:
+            st.sidebar.success("✅ Data cleaned and ready!")
     
     elif data_source == "Load Existing Data":
         if st.sidebar.button("📂 Load Data", use_container_width=True):
@@ -184,6 +374,7 @@ def render_sidebar():
             if data:
                 st.session_state.data = data
                 st.session_state.data_loaded = True
+                st.session_state.cleaning_stats = None  # No stats for loaded data
                 st.rerun()
             else:
                 st.sidebar.error("No existing data found. Generate new data first.")
@@ -204,10 +395,20 @@ def render_sidebar():
                 inventory = process_uploaded_file(inventory_file, 'inventory')
                 
                 if all([sales is not None, products is not None, stores is not None, inventory is not None]):
-                    # Clean uploaded data
-                    cleaner = DataCleaner()
-                    cleaned = cleaner.clean_all(products, stores, sales, inventory, 'data/cleaned')
-                    st.session_state.data = cleaned
+                    # Store as raw data
+                    st.session_state.raw_data = {
+                        'products': products,
+                        'stores': stores,
+                        'sales': sales,
+                        'inventory': inventory,
+                        'campaigns': pd.DataFrame()
+                    }
+                    st.session_state.raw_data_generated = True
+                    
+                    # Clean the data
+                    cleaned_data, cleaning_stats = clean_data(st.session_state.raw_data)
+                    st.session_state.data = cleaned_data
+                    st.session_state.cleaning_stats = cleaning_stats
                     st.session_state.data_loaded = True
                     st.rerun()
             else:
@@ -276,6 +477,7 @@ def render_sidebar():
     
     return view_mode, filters, sim_params
 
+
 # ============================================================================
 # EXECUTIVE VIEW
 # ============================================================================
@@ -285,6 +487,11 @@ def render_executive_view(data, filters, sim_params):
     
     st.markdown("## 📊 Executive Dashboard")
     st.markdown("*Financial and strategic overview for leadership*")
+    
+    # Show cleaning stats if available
+    if st.session_state.cleaning_stats is not None:
+        with st.expander("📊 View Data Cleaning Statistics", expanded=False):
+            display_cleaning_stats(st.session_state.cleaning_stats)
     
     # Initialize calculators
     kpi_calc = KPICalculator(
@@ -485,6 +692,7 @@ def render_executive_view(data, filters, sim_params):
             else:
                 st.warning(f"**{v['constraint']}**: {v['message']}")
 
+
 # ============================================================================
 # MANAGER VIEW
 # ============================================================================
@@ -494,6 +702,11 @@ def render_manager_view(data, filters, sim_params):
     
     st.markdown("## 🔧 Operations Dashboard")
     st.markdown("*Operational risks and execution insights for managers*")
+    
+    # Show cleaning stats if available
+    if st.session_state.cleaning_stats is not None:
+        with st.expander("📊 View Data Cleaning Statistics", expanded=True):
+            display_cleaning_stats(st.session_state.cleaning_stats)
     
     # Initialize calculators
     kpi_calc = KPICalculator(
@@ -730,6 +943,7 @@ def render_manager_view(data, filters, sim_params):
                 "text/csv"
             )
 
+
 # ============================================================================
 # MAIN APP
 # ============================================================================
@@ -747,29 +961,75 @@ def main():
     # Check if data is loaded
     if not st.session_state.data_loaded or st.session_state.data is None:
         st.markdown("---")
-        st.info("👈 Please generate or load data using the sidebar controls to begin.")
         
-        # Show instructions
-        with st.expander("📖 Getting Started", expanded=True):
-            st.markdown("""
-            ### Welcome to UAE Promo Pulse Simulator!
+        # Show different messages based on state
+        if st.session_state.raw_data_generated:
+            st.success("✅ Raw data generated! Now click '🧹 Clean Data' in the sidebar to clean and process the data.")
             
-            This dashboard helps UAE retailers:
-            1. **Rescue messy data** - Clean and validate real-world data exports
-            2. **Compute trustworthy KPIs** - Track revenue, margins, and operational metrics
-            3. **Run what-if simulations** - Test discount scenarios with budget and margin constraints
+            # Preview of raw data
+            st.markdown("### 📋 Raw Data Preview")
             
-            #### To begin:
-            1. Select **"Generate New Data"** in the sidebar to create synthetic retail data
-            2. Click **"Generate & Clean Data"** button
-            3. Use filters to explore different segments
-            4. Adjust simulation parameters to test scenarios
-            5. Toggle between **Executive** and **Manager** views
+            if st.session_state.raw_data:
+                tab1, tab2, tab3, tab4, tab5 = st.tabs(["Products", "Stores", "Sales", "Inventory", "Campaigns"])
+                
+                with tab1:
+                    st.markdown(f"**{len(st.session_state.raw_data['products']):,} records**")
+                    st.dataframe(st.session_state.raw_data['products'].head(10), use_container_width=True)
+                
+                with tab2:
+                    st.markdown(f"**{len(st.session_state.raw_data['stores']):,} records**")
+                    st.dataframe(st.session_state.raw_data['stores'].head(10), use_container_width=True)
+                
+                with tab3:
+                    st.markdown(f"**{len(st.session_state.raw_data['sales']):,} records**")
+                    st.dataframe(st.session_state.raw_data['sales'].head(10), use_container_width=True)
+                
+                with tab4:
+                    st.markdown(f"**{len(st.session_state.raw_data['inventory']):,} records**")
+                    st.dataframe(st.session_state.raw_data['inventory'].head(10), use_container_width=True)
+                
+                with tab5:
+                    st.markdown(f"**{len(st.session_state.raw_data['campaigns']):,} records**")
+                    st.dataframe(st.session_state.raw_data['campaigns'], use_container_width=True)
+        else:
+            st.info("👈 Please generate data using the sidebar controls to begin.")
             
-            #### Dashboard Views:
-            - **Executive View**: Financial KPIs, revenue trends, margin analysis
-            - **Manager View**: Operational risks, stockout alerts, data quality
-            """)
+            # Show instructions
+            with st.expander("📖 Getting Started", expanded=True):
+                st.markdown("""
+                ### Welcome to UAE Promo Pulse Simulator!
+                
+                This dashboard helps UAE retailers:
+                1. **Rescue messy data** - Clean and validate real-world data exports
+                2. **Compute trustworthy KPIs** - Track revenue, margins, and operational metrics
+                3. **Run what-if simulations** - Test discount scenarios with budget and margin constraints
+                
+                #### To begin:
+                
+                **Step 1:** Click **"🎲 Generate Raw Data"** to create synthetic retail data with dirty data issues
+                
+                **Step 2:** Click **"🧹 Clean Data"** to validate and clean the generated data
+                
+                **Step 3:** Use filters to explore different segments
+                
+                **Step 4:** Adjust simulation parameters to test promotional scenarios
+                
+                **Step 5:** Toggle between **Executive** and **Manager** views for different perspectives
+                
+                ---
+                
+                #### Dashboard Views:
+                - **Executive View**: Financial KPIs, revenue trends, margin analysis, recommendations
+                - **Manager View**: Operational risks, stockout alerts, data quality, drill-down analysis
+                
+                #### Data Issues Simulated:
+                - Inconsistent city names (Dubai/DUBAI/dubai etc.)
+                - Missing values (unit_cost, discount_pct)
+                - Duplicate order IDs
+                - Corrupted timestamps
+                - Outliers (extreme quantities and prices)
+                - Invalid inventory (negative stock, extreme values)
+                """)
         
         return
     
