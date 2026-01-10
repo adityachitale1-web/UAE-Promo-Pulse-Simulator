@@ -212,63 +212,29 @@ def view_badge(view):
     st.markdown(f'<span class="view-badge {css}">{emoji} {view} View</span>', unsafe_allow_html=True)
 
 
-def validate_data(products_df, stores_df, sales_df, inventory_df):
-    """Validate uploaded data has required columns"""
-    errors = []
-    if products_df is not None:
-        required = ['product_id', 'category', 'base_price_aed', 'unit_cost_aed']
-        missing = [c for c in required if c not in products_df.columns]
-        if missing:
-            errors.append(f"Products missing columns: {missing}")
-    if stores_df is not None:
-        required = ['store_id', 'city', 'channel']
-        missing = [c for c in required if c not in stores_df.columns]
-        if missing:
-            errors.append(f"Stores missing columns: {missing}")
-    if sales_df is not None:
-        required = ['order_id', 'order_time', 'product_id', 'store_id', 'qty', 'selling_price_aed', 'payment_status']
-        missing = [c for c in required if c not in sales_df.columns]
-        if missing:
-            errors.append(f"Sales missing columns: {missing}")
-    if inventory_df is not None:
-        required = ['snapshot_date', 'product_id', 'store_id', 'stock_on_hand']
-        missing = [c for c in required if c not in inventory_df.columns]
-        if missing:
-            errors.append(f"Inventory missing columns: {missing}")
-    return errors
-
-
-def add_defaults(df, dtype):
-    """Add default columns if missing"""
-    if dtype == 'products':
-        if 'brand' not in df.columns:
-            df['brand'] = 'Unknown'
-        if 'tax_rate' not in df.columns:
-            df['tax_rate'] = 0.05
-        if 'launch_flag' not in df.columns:
-            df['launch_flag'] = 'Regular'
-    elif dtype == 'stores':
-        if 'fulfillment_type' not in df.columns:
-            df['fulfillment_type'] = 'Own'
-    elif dtype == 'sales':
-        if 'discount_pct' not in df.columns:
-            df['discount_pct'] = 0
-        if 'return_flag' not in df.columns:
-            df['return_flag'] = 0
-    elif dtype == 'inventory':
-        if 'reorder_point' not in df.columns:
-            df['reorder_point'] = 20
-        if 'lead_time_days' not in df.columns:
-            df['lead_time_days'] = 7
-    return df
+def safe_get_filter(filters, key, default=None):
+    """Safely get filter value"""
+    val = filters.get(key, default)
+    if val == 'All' or val is None:
+        return None
+    return val
 
 
 # =============================================================================
 # SESSION STATE INITIALIZATION
 # =============================================================================
-for key in ['data_loaded', 'data', 'raw_data', 'raw_data_generated', 'cleaning_stats', 'upload_mode']:
-    if key not in st.session_state:
-        st.session_state[key] = None if key in ['data', 'raw_data', 'cleaning_stats'] else False
+if 'data_loaded' not in st.session_state:
+    st.session_state.data_loaded = False
+if 'data' not in st.session_state:
+    st.session_state.data = None
+if 'raw_data' not in st.session_state:
+    st.session_state.raw_data = None
+if 'raw_data_generated' not in st.session_state:
+    st.session_state.raw_data_generated = False
+if 'cleaning_stats' not in st.session_state:
+    st.session_state.cleaning_stats = None
+if 'upload_mode' not in st.session_state:
+    st.session_state.upload_mode = False
 
 
 # =============================================================================
@@ -309,7 +275,11 @@ if data_source == "Generate Sample Data":
                     disabled=not st.session_state.raw_data_generated):
             if st.session_state.raw_data:
                 with st.spinner("Cleaning data..."):
-                    orig = {k: len(v) for k, v in st.session_state.raw_data.items() if isinstance(v, pd.DataFrame)}
+                    orig = {}
+                    for k, v in st.session_state.raw_data.items():
+                        if isinstance(v, pd.DataFrame):
+                            orig[k] = len(v)
+                    
                     cleaner = DataCleaner()
                     cleaned = cleaner.clean_all(
                         st.session_state.raw_data['products'],
@@ -319,7 +289,12 @@ if data_source == "Generate Sample Data":
                         'data/cleaned'
                     )
                     st.session_state.data = cleaned
-                    cc = {k: len(v) for k, v in cleaned.items() if isinstance(v, pd.DataFrame) and k != 'issues'}
+                    
+                    cc = {}
+                    for k, v in cleaned.items():
+                        if isinstance(v, pd.DataFrame) and k != 'issues':
+                            cc[k] = len(v)
+                    
                     st.session_state.cleaning_stats = {
                         'original': orig,
                         'cleaned': cc,
@@ -337,59 +312,7 @@ if data_source == "Generate Sample Data":
 
 else:
     st.session_state.upload_mode = True
-    st.sidebar.markdown("#### Upload CSV Files")
-    
-    products_file = st.sidebar.file_uploader("📦 Products", type=['csv'], key='products_upload')
-    stores_file = st.sidebar.file_uploader("🏪 Stores", type=['csv'], key='stores_upload')
-    sales_file = st.sidebar.file_uploader("💰 Sales", type=['csv'], key='sales_upload')
-    inventory_file = st.sidebar.file_uploader("📊 Inventory", type=['csv'], key='inventory_upload')
-    
-    if st.sidebar.button("📤 Load & Clean Data", use_container_width=True):
-        if all([products_file, stores_file, sales_file, inventory_file]):
-            try:
-                products_df = pd.read_csv(products_file)
-                stores_df = pd.read_csv(stores_file)
-                sales_df = pd.read_csv(sales_file)
-                inventory_df = pd.read_csv(inventory_file)
-                
-                errors = validate_data(products_df, stores_df, sales_df, inventory_df)
-                if errors:
-                    for e in errors:
-                        st.sidebar.error(e)
-                else:
-                    products_df = add_defaults(products_df, 'products')
-                    stores_df = add_defaults(stores_df, 'stores')
-                    sales_df = add_defaults(sales_df, 'sales')
-                    inventory_df = add_defaults(inventory_df, 'inventory')
-                    
-                    orig = {
-                        'products': len(products_df),
-                        'stores': len(stores_df),
-                        'sales': len(sales_df),
-                        'inventory': len(inventory_df)
-                    }
-                    
-                    with st.spinner("Processing uploaded data..."):
-                        cleaner = DataCleaner()
-                        cleaned = cleaner.clean_all(products_df, stores_df, sales_df, inventory_df, 'data/cleaned')
-                        st.session_state.data = cleaned
-                        cc = {k: len(v) for k, v in cleaned.items() if isinstance(v, pd.DataFrame) and k != 'issues'}
-                        st.session_state.cleaning_stats = {
-                            'original': orig,
-                            'cleaned': cc,
-                            'removed': {k: orig.get(k, 0) - cc.get(k, 0) for k in cc},
-                            'total_issues': len(cleaned['issues']),
-                            'issues_summary': cleaned['issues']['issue_type'].value_counts().to_dict() if len(cleaned['issues']) > 0 else {}
-                        }
-                        st.session_state.data_loaded = True
-                        st.session_state.raw_data_generated = False
-                    
-                    st.sidebar.success("✅ Data uploaded and cleaned!")
-                    st.rerun()
-            except Exception as e:
-                st.sidebar.error(f"Error: {str(e)}")
-        else:
-            st.sidebar.warning("⚠️ Please upload all 4 CSV files")
+    st.sidebar.info("Upload feature - Use 'Generate Sample Data' for demo")
 
 # =============================================================================
 # FILTERS (shown when data is loaded)
@@ -402,46 +325,65 @@ if st.session_state.data_loaded and st.session_state.data:
     data = st.session_state.data
     
     # 1. Date Range Filter
-    if 'sales' in data:
-        sales_dates = pd.to_datetime(data['sales']['order_time'], errors='coerce')
-        min_date = sales_dates.min().date() if not sales_dates.isna().all() else datetime.now().date() - timedelta(days=120)
-        max_date = sales_dates.max().date() if not sales_dates.isna().all() else datetime.now().date()
-        
-        date_range = st.sidebar.date_input(
-            "📅 Date Range",
-            value=(min_date, max_date),
-            min_value=min_date,
-            max_value=max_date,
-            key="date_filter"
-        )
-        if len(date_range) == 2:
-            filters['date_from'] = date_range[0]
-            filters['date_to'] = date_range[1]
+    if 'sales' in data and data['sales'] is not None:
+        try:
+            sales_dates = pd.to_datetime(data['sales']['order_time'], errors='coerce')
+            valid_dates = sales_dates.dropna()
+            if len(valid_dates) > 0:
+                min_date = valid_dates.min().date()
+                max_date = valid_dates.max().date()
+                
+                date_range = st.sidebar.date_input(
+                    "📅 Date Range",
+                    value=(min_date, max_date),
+                    min_value=min_date,
+                    max_value=max_date,
+                    key="date_filter"
+                )
+                if isinstance(date_range, tuple) and len(date_range) == 2:
+                    filters['date_from'] = date_range[0]
+                    filters['date_to'] = date_range[1]
+                else:
+                    filters['date_from'] = None
+                    filters['date_to'] = None
+        except Exception:
+            filters['date_from'] = None
+            filters['date_to'] = None
     
     # 2. City Filter
-    if 'stores' in data:
-        cities = ['All'] + sorted(data['stores']['city'].unique().tolist())
+    if 'stores' in data and data['stores'] is not None and 'city' in data['stores'].columns:
+        cities = ['All'] + sorted(data['stores']['city'].dropna().unique().tolist())
         filters['city'] = st.sidebar.selectbox("🏙️ City", cities)
+    else:
+        filters['city'] = 'All'
     
     # 3. Channel Filter
-    if 'stores' in data:
-        channels = ['All'] + sorted(data['stores']['channel'].unique().tolist())
+    if 'stores' in data and data['stores'] is not None and 'channel' in data['stores'].columns:
+        channels = ['All'] + sorted(data['stores']['channel'].dropna().unique().tolist())
         filters['channel'] = st.sidebar.selectbox("📱 Channel", channels)
+    else:
+        filters['channel'] = 'All'
     
     # 4. Category Filter
-    if 'products' in data:
-        categories = ['All'] + sorted(data['products']['category'].unique().tolist())
+    if 'products' in data and data['products'] is not None and 'category' in data['products'].columns:
+        categories = ['All'] + sorted(data['products']['category'].dropna().unique().tolist())
         filters['category'] = st.sidebar.selectbox("📦 Category", categories)
+    else:
+        filters['category'] = 'All'
     
     # 5. Brand Filter
-    if 'products' in data and 'brand' in data['products'].columns:
-        brands = ['All'] + sorted(data['products']['brand'].unique().tolist())
+    if 'products' in data and data['products'] is not None and 'brand' in data['products'].columns:
+        brands = ['All'] + sorted(data['products']['brand'].dropna().unique().tolist())
         filters['brand'] = st.sidebar.selectbox("🏷️ Brand", brands)
+    else:
+        filters['brand'] = 'All'
     
     # 6. Fulfillment Filter
-    if 'stores' in data and 'fulfillment_type' in data['stores'].columns:
-        fulfillments = ['All'] + sorted(data['stores']['fulfillment_type'].unique().tolist())
+    if 'stores' in data and data['stores'] is not None and 'fulfillment_type' in data['stores'].columns:
+        fulfillments = ['All'] + sorted(data['stores']['fulfillment_type'].dropna().unique().tolist())
         filters['fulfillment'] = st.sidebar.selectbox("🚚 Fulfillment", fulfillments)
+    else:
+        filters['fulfillment'] = 'All'
 
 # =============================================================================
 # SIMULATION PARAMETERS
@@ -478,78 +420,7 @@ if not st.session_state.data_loaded:
     # Welcome screen
     st.markdown("---")
     
-    if st.session_state.upload_mode:
-        st.info("👈 Upload your CSV files in the sidebar to begin analysis")
-        
-        with st.expander("📋 Required Data Format", expanded=True):
-            st.markdown("""
-            **Products CSV:** `product_id`, `category`, `base_price_aed`, `unit_cost_aed`, (optional: `brand`)
-            
-            **Stores CSV:** `store_id`, `city`, `channel`, (optional: `fulfillment_type`)
-            
-            **Sales CSV:** `order_id`, `order_time`, `product_id`, `store_id`, `qty`, `selling_price_aed`, `payment_status`, (optional: `discount_pct`, `return_flag`)
-            
-            **Inventory CSV:** `snapshot_date`, `product_id`, `store_id`, `stock_on_hand`
-            """)
-            
-            st.markdown("#### 📥 Download Templates")
-            cols = st.columns(4)
-            with cols[0]:
-                st.download_button(
-                    "📦 Products",
-                    pd.DataFrame({
-                        'product_id': ['PROD_0001'],
-                        'category': ['Electronics'],
-                        'brand': ['Samsung'],
-                        'base_price_aed': [1500],
-                        'unit_cost_aed': [900]
-                    }).to_csv(index=False),
-                    "products_template.csv",
-                    use_container_width=True
-                )
-            with cols[1]:
-                st.download_button(
-                    "🏪 Stores",
-                    pd.DataFrame({
-                        'store_id': ['STORE_01'],
-                        'city': ['Dubai'],
-                        'channel': ['App'],
-                        'fulfillment_type': ['Own']
-                    }).to_csv(index=False),
-                    "stores_template.csv",
-                    use_container_width=True
-                )
-            with cols[2]:
-                st.download_button(
-                    "💰 Sales",
-                    pd.DataFrame({
-                        'order_id': ['ORD_000001'],
-                        'order_time': ['2024-01-15 10:30:00'],
-                        'product_id': ['PROD_0001'],
-                        'store_id': ['STORE_01'],
-                        'qty': [1],
-                        'selling_price_aed': [1350],
-                        'discount_pct': [10],
-                        'payment_status': ['Paid'],
-                        'return_flag': [0]
-                    }).to_csv(index=False),
-                    "sales_template.csv",
-                    use_container_width=True
-                )
-            with cols[3]:
-                st.download_button(
-                    "📊 Inventory",
-                    pd.DataFrame({
-                        'snapshot_date': ['2024-01-15'],
-                        'product_id': ['PROD_0001'],
-                        'store_id': ['STORE_01'],
-                        'stock_on_hand': [50]
-                    }).to_csv(index=False),
-                    "inventory_template.csv",
-                    use_container_width=True
-                )
-    
-    elif st.session_state.raw_data_generated:
+    if st.session_state.raw_data_generated:
         st.success("✅ Raw data generated! Click 'Clean' in the sidebar to process.")
         
         if st.session_state.raw_data:
@@ -628,38 +499,56 @@ else:
     data = st.session_state.data
     
     # Initialize calculators
-    kpi_calc = KPICalculator(
-        data['sales'], data['products'], data['stores'], data['inventory']
-    )
-    simulator = PromoSimulator(
-        data['sales'], data['products'], data['stores'], data['inventory']
-    )
+    try:
+        kpi_calc = KPICalculator(
+            data['sales'], data['products'], data['stores'], data['inventory']
+        )
+        simulator = PromoSimulator(
+            data['sales'], data['products'], data['stores'], data['inventory']
+        )
+    except Exception as e:
+        st.error(f"Error initializing calculators: {e}")
+        st.stop()
     
-    # Apply filters
-    filtered_df = kpi_calc.filter_data(
-        city=filters.get('city'),
-        channel=filters.get('channel'),
-        category=filters.get('category'),
-        brand=filters.get('brand'),
-        fulfillment=filters.get('fulfillment'),
-        date_from=filters.get('date_from'),
-        date_to=filters.get('date_to')
-    )
+    # Apply filters safely
+    try:
+        filtered_df = kpi_calc.filter_data(
+            city=safe_get_filter(filters, 'city'),
+            channel=safe_get_filter(filters, 'channel'),
+            category=safe_get_filter(filters, 'category'),
+            brand=safe_get_filter(filters, 'brand'),
+            fulfillment=safe_get_filter(filters, 'fulfillment'),
+            date_from=filters.get('date_from'),
+            date_to=filters.get('date_to')
+        )
+    except Exception as e:
+        st.error(f"Error filtering data: {e}")
+        filtered_df = kpi_calc.sales
     
     # Compute KPIs
     kpis = kpi_calc.compute_kpis(filtered_df)
     daily = kpi_calc.compute_daily(filtered_df)
     
     # Run simulation
-    sim_results = simulator.run_simulation(
-        sim_params['discount_pct'],
-        sim_params['promo_budget'],
-        sim_params['margin_floor'],
-        sim_params['simulation_days'],
-        city=filters.get('city'),
-        channel=filters.get('channel'),
-        category=filters.get('category')
-    )
+    try:
+        sim_results = simulator.run_simulation(
+            sim_params['discount_pct'],
+            sim_params['promo_budget'],
+            sim_params['margin_floor'],
+            sim_params['simulation_days'],
+            city=safe_get_filter(filters, 'city'),
+            channel=safe_get_filter(filters, 'channel'),
+            category=safe_get_filter(filters, 'category')
+        )
+    except Exception as e:
+        st.warning(f"Simulation warning: {e}")
+        sim_results = {
+            'results': {'profit_proxy': 0, 'budget_utilization': 0, 'stockout_risk_pct': 0, 'high_risk_skus': 0},
+            'violations': [],
+            'top_risk_items': pd.DataFrame(),
+            'constraint_violators': [],
+            'simulation_detail': None
+        }
     
     # ==========================================================================
     # DATA QUALITY REPORT
@@ -709,7 +598,7 @@ else:
         with col4:
             kpi_card("Avg Discount", f"{kpis['avg_discount_pct']:.1f}%")
         with col5:
-            profit = sim_results['results']['profit_proxy'] if sim_results['results'] else 0
+            profit = sim_results['results'].get('profit_proxy', 0) if sim_results.get('results') else 0
             kpi_card("Profit Proxy (Sim)", f"AED {profit:,.0f}",
                     "Profitable" if profit > 0 else "Loss",
                     "positive" if profit > 0 else "negative")
@@ -727,7 +616,7 @@ else:
         with col4:
             kpi_card("AOV", f"AED {kpis['aov']:,.0f}")
         with col5:
-            budget_util = sim_results['results']['budget_utilization'] if sim_results['results'] else 0
+            budget_util = sim_results['results'].get('budget_utilization', 0) if sim_results.get('results') else 0
             kpi_card("Budget Utilization", f"{budget_util:.1f}%")
         
         st.markdown("---")
@@ -765,17 +654,6 @@ else:
                     yaxis_title="Revenue (AED)"
                 )
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # Insight
-                if len(daily) >= 7:
-                    trend = daily['revenue'].iloc[-7:].mean() - daily['revenue'].iloc[:7].mean()
-                    detailed_insight(
-                        "Revenue Trend Analysis",
-                        f"Revenue is <strong>{'increasing' if trend > 0 else 'decreasing'}</strong> with AED {abs(trend):,.0f} change in weekly average",
-                        [f"Total days analyzed: {len(daily)}", f"Peak day revenue: AED {daily['revenue'].max():,.0f}"],
-                        ["Scale marketing on high-performing days" if trend > 0 else "Investigate decline causes"],
-                        "success" if trend > 0 else "warning"
-                    )
             else:
                 st.info("No data for trend analysis")
         
@@ -795,6 +673,8 @@ else:
                     )
                     fig.update_layout(height=300)
                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No city breakdown data")
             
             with tab2:
                 if len(channel_breakdown) > 0:
@@ -807,6 +687,8 @@ else:
                     fig.update_layout(height=300)
                     fig.update_traces(textposition='outside')
                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("No channel breakdown data")
         
         # Chart Row 2: Margin by Category & Scenario Impact
         col1, col2 = st.columns(2)
@@ -827,17 +709,8 @@ else:
                              annotation_text=f"Floor: {sim_params['margin_floor']}%")
                 fig.update_layout(height=350, showlegend=False, plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # Insight
-                low_margin = cat_breakdown[cat_breakdown['margin_pct'] < sim_params['margin_floor']]
-                if len(low_margin) > 0:
-                    detailed_insight(
-                        "Margin Alert",
-                        f"<strong>{len(low_margin)}</strong> categories below {sim_params['margin_floor']}% margin floor",
-                        [f"At risk: {', '.join(low_margin['category'].tolist())}"],
-                        ["Review pricing", "Negotiate supplier costs", "Reduce promotions"],
-                        "warning"
-                    )
+            else:
+                st.info("No category data")
         
         with col2:
             section_header("Scenario Impact (Profit vs Discount)", "🎯")
@@ -847,18 +720,23 @@ else:
             scenario_data = []
             
             for d in discounts:
-                res = simulator.run_simulation(
-                    d, sim_params['promo_budget'], sim_params['margin_floor'],
-                    sim_params['simulation_days'],
-                    filters.get('city'), filters.get('channel'), filters.get('category')
-                )
-                if res['results']:
-                    scenario_data.append({
-                        'Discount %': d,
-                        'Profit Proxy': res['results']['profit_proxy'],
-                        'Margin %': res['results']['sim_margin_pct'],
-                        'Viable': res['results']['sim_margin_pct'] >= sim_params['margin_floor']
-                    })
+                try:
+                    res = simulator.run_simulation(
+                        d, sim_params['promo_budget'], sim_params['margin_floor'],
+                        sim_params['simulation_days'],
+                        safe_get_filter(filters, 'city'),
+                        safe_get_filter(filters, 'channel'),
+                        safe_get_filter(filters, 'category')
+                    )
+                    if res.get('results'):
+                        scenario_data.append({
+                            'Discount %': d,
+                            'Profit Proxy': res['results'].get('profit_proxy', 0),
+                            'Margin %': res['results'].get('sim_margin_pct', 0),
+                            'Viable': res['results'].get('sim_margin_pct', 0) >= sim_params['margin_floor']
+                        })
+                except Exception:
+                    pass
             
             if scenario_data:
                 scenario_df = pd.DataFrame(scenario_data)
@@ -879,22 +757,12 @@ else:
                     plot_bgcolor='rgba(0,0,0,0)'
                 )
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # Find optimal
-                viable = scenario_df[scenario_df['Viable']]
-                if len(viable) > 0:
-                    optimal = viable.loc[viable['Profit Proxy'].idxmax()]
-                    detailed_insight(
-                        "Optimal Scenario",
-                        f"Best discount: <strong>{optimal['Discount %']}%</strong> with profit <strong>AED {optimal['Profit Proxy']:,.0f}</strong>",
-                        [f"Maintains margin above {sim_params['margin_floor']}%", "Green bars = viable scenarios"],
-                        ["Apply recommended discount", "Monitor actual vs projected"],
-                        "success"
-                    )
+            else:
+                st.info("Could not generate scenario analysis")
         
         # Recommendation Box
         section_header("Auto-Generated Recommendations", "💡")
-        recommendations = generate_recommendation(kpis, sim_results['results'], sim_results['violations'])
+        recommendations = generate_recommendation(kpis, sim_results.get('results'), sim_results.get('violations', []))
         
         rec_cols = st.columns(2)
         for i, rec in enumerate(recommendations):
@@ -918,8 +786,8 @@ else:
         
         col1, col2, col3, col4, col5 = st.columns(5)
         
-        stockout_risk = sim_results['results']['stockout_risk_pct'] if sim_results['results'] else 0
-        high_risk_skus = sim_results['results']['high_risk_skus'] if sim_results['results'] else 0
+        stockout_risk = sim_results['results'].get('stockout_risk_pct', 0) if sim_results.get('results') else 0
+        high_risk_skus = sim_results['results'].get('high_risk_skus', 0) if sim_results.get('results') else 0
         
         with col1:
             kpi_card("Stockout Risk", f"{stockout_risk:.1f}%",
@@ -940,187 +808,121 @@ else:
         
         st.markdown("---")
         
-        # Chart Row 1: Stockout by City/Channel & Top Risk Items
+        # Chart Row 1
         col1, col2 = st.columns(2)
         
         with col1:
             section_header("Stockout Risk by City/Channel", "📍")
             
-            if sim_results.get('simulation_detail') is not None:
-                sim_detail = sim_results['simulation_detail']
-                
+            sim_detail = sim_results.get('simulation_detail')
+            if sim_detail is not None and len(sim_detail) > 0:
                 # Merge city/channel info
-                sim_detail = sim_detail.merge(
-                    data['stores'][['store_id', 'city', 'channel']].drop_duplicates(),
-                    on='store_id', how='left', suffixes=('', '_store')
-                )
+                try:
+                    sim_detail = sim_detail.merge(
+                        data['stores'][['store_id', 'city', 'channel']].drop_duplicates(),
+                        on='store_id', how='left', suffixes=('', '_store')
+                    )
+                except Exception:
+                    pass
+                
+                # Use city column (prefer from stores merge if available)
+                city_col = 'city_store' if 'city_store' in sim_detail.columns else 'city'
+                channel_col = 'channel_store' if 'channel_store' in sim_detail.columns else 'channel'
                 
                 tab1, tab2 = st.tabs(["By City", "By Channel"])
                 
                 with tab1:
-                    city_risk = sim_detail.groupby('city').agg({
-                        'stockout_risk': ['sum', 'count'],
-                        'excess_demand': 'sum'
-                    }).reset_index()
-                    city_risk.columns = ['City', 'At Risk', 'Total', 'Excess Demand']
-                    city_risk['Risk %'] = (city_risk['At Risk'] / city_risk['Total'] * 100).round(1)
-                    
-                    fig = px.bar(
-                        city_risk, x='City', y='Risk %',
-                        color='Risk %',
-                        color_continuous_scale=[[0, '#00D4AA'], [0.5, '#FFD700'], [1, '#f5576c']],
-                        text='Risk %'
-                    )
-                    fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-                    fig.add_hline(y=30, line_dash="dash", line_color="red", annotation_text="Threshold")
-                    fig.update_layout(height=300, showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    if city_col in sim_detail.columns:
+                        city_risk = sim_detail.groupby(city_col).agg({
+                            'stockout_risk': ['sum', 'count'],
+                            'excess_demand': 'sum'
+                        }).reset_index()
+                        city_risk.columns = ['City', 'At Risk', 'Total', 'Excess Demand']
+                        city_risk['Risk %'] = (city_risk['At Risk'] / city_risk['Total'] * 100).round(1)
+                        
+                        fig = px.bar(
+                            city_risk, x='City', y='Risk %',
+                            color='Risk %',
+                            color_continuous_scale=[[0, '#00D4AA'], [0.5, '#FFD700'], [1, '#f5576c']],
+                            text='Risk %'
+                        )
+                        fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+                        fig.add_hline(y=30, line_dash="dash", line_color="red", annotation_text="Threshold")
+                        fig.update_layout(height=300, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("City data not available")
                 
                 with tab2:
-                    channel_risk = sim_detail.groupby('channel').agg({
-                        'stockout_risk': ['sum', 'count'],
-                        'excess_demand': 'sum'
-                    }).reset_index()
-                    channel_risk.columns = ['Channel', 'At Risk', 'Total', 'Excess Demand']
-                    channel_risk['Risk %'] = (channel_risk['At Risk'] / channel_risk['Total'] * 100).round(1)
-                    
-                    fig = px.bar(
-                        channel_risk, x='Channel', y='Risk %',
-                        color='Risk %',
-                        color_continuous_scale=[[0, '#00D4AA'], [0.5, '#FFD700'], [1, '#f5576c']],
-                        text='Risk %'
-                    )
-                    fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
-                    fig.add_hline(y=30, line_dash="dash", line_color="red")
-                    fig.update_layout(height=300, showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    if channel_col in sim_detail.columns:
+                        channel_risk = sim_detail.groupby(channel_col).agg({
+                            'stockout_risk': ['sum', 'count'],
+                            'excess_demand': 'sum'
+                        }).reset_index()
+                        channel_risk.columns = ['Channel', 'At Risk', 'Total', 'Excess Demand']
+                        channel_risk['Risk %'] = (channel_risk['At Risk'] / channel_risk['Total'] * 100).round(1)
+                        
+                        fig = px.bar(
+                            channel_risk, x='Channel', y='Risk %',
+                            color='Risk %',
+                            color_continuous_scale=[[0, '#00D4AA'], [0.5, '#FFD700'], [1, '#f5576c']],
+                            text='Risk %'
+                        )
+                        fig.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+                        fig.add_hline(y=30, line_dash="dash", line_color="red")
+                        fig.update_layout(height=300, showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("Channel data not available")
+            else:
+                st.info("Run simulation to see stockout analysis")
         
         with col2:
             section_header("Top 10 Stockout Risk Items", "🔴")
             
-            if sim_results.get('top_risk_items') is not None:
-                risk_df = sim_results['top_risk_items'].copy()
-                
-                # Style the dataframe
-                def color_risk(val):
-                    if val > 150:
-                        return 'background-color: #f8d7da'
-                    elif val > 100:
-                        return 'background-color: #fff3cd'
-                    return ''
-                
-                st.dataframe(
-                    risk_df.style.applymap(color_risk, subset=['Risk %']),
-                    use_container_width=True,
-                    height=350
-                )
-                
-                if len(risk_df) > 0:
-                    detailed_insight(
-                        "Stockout Alert",
-                        f"<strong>{len(risk_df[risk_df['Risk %'] > 100])}</strong> product-stores with demand exceeding stock",
-                        [f"Highest risk: {risk_df.iloc[0]['Product']} at {risk_df.iloc[0]['Store']}"],
-                        ["Expedite replenishment", "Consider inventory reallocation"],
-                        "warning"
-                    )
+            top_risk = sim_results.get('top_risk_items')
+            if top_risk is not None and len(top_risk) > 0:
+                st.dataframe(top_risk, use_container_width=True, height=350)
+            else:
+                st.info("No risk items to display")
         
-        # Chart Row 2: Inventory Distribution & Demand vs Stock
+        # Chart Row 2
         col1, col2 = st.columns(2)
         
         with col1:
             section_header("Inventory Distribution", "📦")
             
-            # Get latest inventory
             inv = data['inventory'].copy()
-            inv['snapshot_date'] = pd.to_datetime(inv['snapshot_date'])
-            latest_inv = inv[inv['snapshot_date'] == inv['snapshot_date'].max()]
+            inv['snapshot_date'] = pd.to_datetime(inv['snapshot_date'], errors='coerce')
+            latest_date = inv['snapshot_date'].max()
+            if not pd.isna(latest_date):
+                latest_inv = inv[inv['snapshot_date'] == latest_date]
+            else:
+                latest_inv = inv
             
-            fig = px.histogram(
-                latest_inv, x='stock_on_hand',
-                nbins=30,
-                color_discrete_sequence=['#1E3A5F']
-            )
-            fig.add_vline(x=latest_inv['stock_on_hand'].median(), line_dash="dash", 
-                         line_color="#00D4AA", annotation_text="Median")
-            fig.update_layout(
-                height=300,
-                xaxis_title="Stock on Hand",
-                yaxis_title="Count",
-                plot_bgcolor='rgba(0,0,0,0)'
-            )
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Stats
-            col_a, col_b, col_c = st.columns(3)
-            col_a.metric("Avg Stock", f"{latest_inv['stock_on_hand'].mean():.0f}")
-            col_b.metric("Median Stock", f"{latest_inv['stock_on_hand'].median():.0f}")
-            col_c.metric("Zero Stock", f"{(latest_inv['stock_on_hand'] == 0).sum()}")
-        
-        with col2:
-            section_header("Demand vs Stock Scatter", "📊")
-            
-            if sim_results.get('simulation_detail') is not None:
-                sim_detail = sim_results['simulation_detail']
-                
-                # Sample for performance
-                sample = sim_detail.sample(min(500, len(sim_detail)))
-                
-                fig = px.scatter(
-                    sample,
-                    x='stock_on_hand',
-                    y='sim_demand',
-                    color='stockout_risk',
-                    color_discrete_map={0: '#00D4AA', 1: '#f5576c'},
-                    opacity=0.6,
-                    labels={'stockout_risk': 'At Risk'}
+            if len(latest_inv) > 0:
+                fig = px.histogram(
+                    latest_inv, x='stock_on_hand',
+                    nbins=30,
+                    color_discrete_sequence=['#1E3A5F']
                 )
-                # Add diagonal line (demand = stock)
-                max_val = max(sample['stock_on_hand'].max(), sample['sim_demand'].max())
-                fig.add_trace(go.Scatter(
-                    x=[0, max_val], y=[0, max_val],
-                    mode='lines', name='Demand = Stock',
-                    line=dict(color='gray', dash='dash')
-                ))
+                fig.add_vline(x=latest_inv['stock_on_hand'].median(), line_dash="dash", 
+                             line_color="#00D4AA", annotation_text="Median")
                 fig.update_layout(
                     height=300,
                     xaxis_title="Stock on Hand",
-                    yaxis_title="Simulated Demand",
+                    yaxis_title="Count",
                     plot_bgcolor='rgba(0,0,0,0)'
                 )
                 st.plotly_chart(fig, use_container_width=True)
-        
-        # Chart Row 3: Issues Pareto & Constraint Violations
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            section_header("Issues Pareto (from Cleaning)", "⚠️")
-            
-            if len(data['issues']) > 0:
-                issue_counts = data['issues']['issue_type'].value_counts().reset_index()
-                issue_counts.columns = ['Issue Type', 'Count']
-                issue_counts['Cumulative %'] = (issue_counts['Count'].cumsum() / issue_counts['Count'].sum() * 100)
                 
-                fig = make_subplots(specs=[[{"secondary_y": True}]])
-                fig.add_trace(
-                    go.Bar(x=issue_counts['Issue Type'], y=issue_counts['Count'],
-                          name='Count', marker_color='#1E3A5F'),
-                    secondary_y=False
-                )
-                fig.add_trace(
-                    go.Scatter(x=issue_counts['Issue Type'], y=issue_counts['Cumulative %'],
-                              name='Cumulative %', line=dict(color='#00D4AA', width=3)),
-                    secondary_y=True
-                )
-                fig.add_hline(y=80, line_dash="dash", line_color="#f5576c", secondary_y=True)
-                fig.update_layout(
-                    height=350,
-                    legend=dict(orientation="h", y=-0.25),
-                    plot_bgcolor='rgba(0,0,0,0)'
-                )
-                fig.update_xaxes(tickangle=-45)
-                st.plotly_chart(fig, use_container_width=True)
+                # Stats
+                col_a, col_b, col_c = st.columns(3)
+                col_a.metric("Avg Stock", f"{latest_inv['stock_on_hand'].mean():.0f}")
+                col_b.metric("Median Stock", f"{latest_inv['stock_on_hand'].median():.0f}")
+                col_c.metric("Zero Stock", f"{(latest_inv['stock_on_hand'] == 0).sum()}")
             else:
-                st.info("No issues logged during cleaning")
+                st.info("No inventory data")
         
         with col2:
             section_header("Constraint Violations", "🚫")
@@ -1129,22 +931,14 @@ else:
             
             if violations:
                 for v in violations:
-                    severity_class = "constraint-card-error" if v['severity'] == 'HIGH' else "constraint-card"
-                    icon = "🚫" if v['severity'] == 'HIGH' else "⚠️"
+                    severity_class = "constraint-card-error" if v.get('severity') == 'HIGH' else "constraint-card"
+                    icon = "🚫" if v.get('severity') == 'HIGH' else "⚠️"
                     st.markdown(f"""
                     <div class="{severity_class}">
-                        <strong>{icon} {v['constraint']}</strong><br>
-                        {v['message']}
+                        <strong>{icon} {v.get('constraint', 'CONSTRAINT')}</strong><br>
+                        {v.get('message', '')}
                     </div>
                     """, unsafe_allow_html=True)
-                
-                # Show top violators if available
-                if sim_results.get('constraint_violators'):
-                    with st.expander("📋 View Top Constraint Violators"):
-                        for cv in sim_results['constraint_violators']:
-                            st.markdown(f"**{cv['constraint']}**")
-                            violators_df = pd.DataFrame(cv['top_violators'])
-                            st.dataframe(violators_df, use_container_width=True, height=150)
             else:
                 st.success("✅ All constraints satisfied!")
                 st.markdown("""
@@ -1153,45 +947,35 @@ else:
                 - ✅ Stock levels adequate
                 """)
         
-        # Drill-down section
-        st.markdown("---")
-        section_header("Drill-Down Analysis", "🔍")
+        # Issues Pareto
+        section_header("Issues Pareto (from Cleaning)", "⚠️")
         
-        drill_col1, drill_col2 = st.columns([1, 2])
-        
-        with drill_col1:
-            st.markdown("#### Select Filters")
-            drill_city = st.selectbox("City", ['All'] + data['stores']['city'].unique().tolist(), key='drill_city')
-            drill_cat = st.selectbox("Category", ['All'] + data['products']['category'].unique().tolist(), key='drill_cat')
-        
-        with drill_col2:
-            st.markdown("#### Filtered Risk Table")
+        if len(data['issues']) > 0:
+            issue_counts = data['issues']['issue_type'].value_counts().reset_index()
+            issue_counts.columns = ['Issue Type', 'Count']
+            issue_counts['Cumulative %'] = (issue_counts['Count'].cumsum() / issue_counts['Count'].sum() * 100)
             
-            if sim_results.get('simulation_detail') is not None:
-                drill_df = sim_results['simulation_detail'].copy()
-                
-                # Merge for filtering
-                drill_df = drill_df.merge(
-                    data['stores'][['store_id', 'city']].drop_duplicates(),
-                    on='store_id', how='left', suffixes=('', '_s')
-                )
-                
-                if drill_city != 'All':
-                    drill_df = drill_df[drill_df['city'] == drill_city]
-                if drill_cat != 'All':
-                    drill_df = drill_df[drill_df['category'] == drill_cat]
-                
-                if len(drill_df) > 0:
-                    drill_summary = drill_df.groupby(['product_id', 'store_id']).agg({
-                        'stock_on_hand': 'first',
-                        'sim_demand': 'first',
-                        'stockout_risk': 'first',
-                        'excess_demand': 'first'
-                    }).reset_index().nlargest(10, 'excess_demand')
-                    
-                    st.dataframe(drill_summary, use_container_width=True, height=250)
-                else:
-                    st.info("No data for selected filters")
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+            fig.add_trace(
+                go.Bar(x=issue_counts['Issue Type'], y=issue_counts['Count'],
+                      name='Count', marker_color='#1E3A5F'),
+                secondary_y=False
+            )
+            fig.add_trace(
+                go.Scatter(x=issue_counts['Issue Type'], y=issue_counts['Cumulative %'],
+                          name='Cumulative %', line=dict(color='#00D4AA', width=3)),
+                secondary_y=True
+            )
+            fig.add_hline(y=80, line_dash="dash", line_color="#f5576c", secondary_y=True)
+            fig.update_layout(
+                height=350,
+                legend=dict(orientation="h", y=-0.25),
+                plot_bgcolor='rgba(0,0,0,0)'
+            )
+            fig.update_xaxes(tickangle=-45)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No issues logged during cleaning")
     
     # ==========================================================================
     # DOWNLOAD SECTION
@@ -1223,7 +1007,7 @@ else:
             st.button("📄 Issues Log", disabled=True, use_container_width=True)
     
     with col3:
-        if sim_results['results']:
+        if sim_results.get('results'):
             sim_export = pd.DataFrame([sim_results['results']])
             st.download_button(
                 "📄 Simulation Results",
@@ -1234,10 +1018,11 @@ else:
             )
     
     with col4:
-        if sim_results['top_risk_items'] is not None:
+        top_risk = sim_results.get('top_risk_items')
+        if top_risk is not None and len(top_risk) > 0:
             st.download_button(
                 "📄 Risk Items",
-                sim_results['top_risk_items'].to_csv(index=False),
+                top_risk.to_csv(index=False),
                 "risk_items.csv",
                 "text/csv",
                 use_container_width=True
