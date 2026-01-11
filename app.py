@@ -152,13 +152,27 @@ st.markdown("""
     }
     .view-executive {background: linear-gradient(90deg, #667eea, #764ba2); color: white;}
     .view-manager {background: linear-gradient(90deg, #11998e, #38ef7d); color: white;}
+    
+    /* Updated Constraint Cards - Better Readability */
     .constraint-card {
-        background: #fff3cd; border-left: 4px solid #ffc107;
-        padding: 0.8rem; border-radius: 5px; margin: 0.3rem 0;
+        background: linear-gradient(135deg, #1E3A5F 0%, #2E5A8F 100%);
+        border-left: 5px solid #ffc107;
+        padding: 1rem 1.2rem; border-radius: 8px; margin: 0.5rem 0;
+        color: #ffffff; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .constraint-card strong {
+        color: #ffc107; font-size: 1rem;
     }
     .constraint-card-error {
-        background: #f8d7da; border-left: 4px solid #dc3545;
+        background: linear-gradient(135deg, #8B0000 0%, #B22222 100%);
+        border-left: 5px solid #ff6b6b;
+        padding: 1rem 1.2rem; border-radius: 8px; margin: 0.5rem 0;
+        color: #ffffff; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
+    .constraint-card-error strong {
+        color: #ffcccc; font-size: 1rem;
+    }
+    
     .upload-box {
         background: #f8f9fa; border: 2px dashed #dee2e6; border-radius: 10px;
         padding: 1rem; margin: 0.5rem 0; text-align: center;
@@ -282,7 +296,7 @@ def add_default_columns(df, file_type):
     
     if file_type == 'products':
         if 'unit_cost_aed' not in df.columns:
-            df['unit_cost_aed'] = df['base_price_aed'] * 0.6  # Assume 40% margin
+            df['unit_cost_aed'] = df['base_price_aed'] * 0.6
         if 'brand' not in df.columns:
             df['brand'] = 'Unknown'
         if 'tax_rate' not in df.columns:
@@ -1479,10 +1493,13 @@ else:
         whatif_fig = create_whatif_heatmap(simulator, sim_params, filters)
         st.plotly_chart(whatif_fig, use_container_width=True)
         
+        # Updated Interpretation Box with better readability
         st.markdown("""
-        <div style="background: #e8f4f8; padding: 1rem; border-radius: 8px; margin-top: 0.5rem;">
-            <strong>📊 Interpretation:</strong> Green cells indicate profitable scenarios. 
-            Use this heatmap to identify optimal discount levels per category.
+        <div style="background: linear-gradient(135deg, #1E3A5F 0%, #2E5A8F 100%); 
+                    padding: 1rem; border-radius: 8px; margin-top: 0.5rem; color: #ffffff;">
+            <strong style="color: #00D4AA;">📊 Interpretation:</strong> 
+            <span style="color: #e0e0e0;">Green cells indicate profitable scenarios. 
+            Use this heatmap to identify optimal discount levels per category.</span>
         </div>
         """, unsafe_allow_html=True)
         
