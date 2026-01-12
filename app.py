@@ -6,6 +6,7 @@ Includes all 12 required chart types + Data Upload Option.
 
 Features:
 - Generate Sample Data OR Upload Your Own CSV Files
+- SMART FILE DETECTION - Validates files immediately on upload
 - 5+ Sidebar Filters
 - 15 KPIs with full visualization
 - 12 Chart Types
@@ -37,6 +38,277 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# =============================================================================
+# FILE DETECTION AND VALIDATION SYSTEM
+# =============================================================================
+
+# Define file signatures - unique and required columns for each file type
+FILE_SIGNATURES = {
+    'products': {
+        'required': ['product_id', 'category', 'base_price_aed'],
+        'optional': ['unit_cost_aed', 'brand', 'tax_rate', 'launch_flag', 'product_name'],
+        'unique_identifiers': ['product_id', 'base_price_aed'],  # Columns that strongly identify this file
+        'description': 'Product master data with pricing'
+    },
+    'stores': {
+        'required': ['store_id', 'city', 'channel'],
+        'optional': ['fulfillment_type', 'store_name', 'opening_date'],
+        'unique_identifiers': ['store_id', 'channel', 'city'],
+        'description': 'Store/location master data'
+    },
+    'sales': {
+        'required': ['order_id', 'order_time', 'product_id', 'store_id', 'qty', 'selling_price_aed', 'payment_status'],
+        'optional': ['discount_pct', 'return_flag', 'customer_id'],
+        'unique_identifiers': ['order_id', 'order_time', 'payment_status'],
+        'description': 'Sales transactions'
+    },
+    'inventory': {
+        'required': ['snapshot_date', 'product_id', 'store_id', 'stock_on_hand'],
+        'optional': ['reorder_point', 'lead_time_days'],
+        'unique_identifiers': ['snapshot_date', 'stock_on_hand'],
+        'description': 'Inventory snapshots'
+    }
+}
+
+
+def detect_file_type(df):
+    """
+    Detect the type of file based on its columns.
+    
+    Returns:
+        tuple: (detected_type, confidence_score, match_details)
+               detected_type: 'products', 'stores', 'sales', 'inventory', or 'unknown'
+               confidence_score: 0-100 indicating match confidence
+               match_details: dict with matching info
+    """
+    if df is None or len(df.columns) == 0:
+        return 'unknown', 0, {'error': 'Empty or invalid file'}
+    
+    columns = set([col.lower().strip() for col in df.columns])
+    original_columns = set(df.columns.tolist())
+    
+    best_match = 'unknown'
+    best_score = 0
+    best_details = {}
+    
+    for file_type, signature in FILE_SIGNATURES.items():
+        required = set([col.lower() for col in signature['required']])
+        optional = set([col.lower() for col in signature['optional']])
+        unique_ids = set([col.lower() for col in signature['unique_identifiers']])
+        all_expected = required | optional
+        
+        # Calculate matches
+        required_matches = required & columns
+        optional_matches = optional & columns
+        unique_matches = unique_ids & columns
+        all_matches = all_expected & columns
+        
+        # Calculate scores
+        required_score = len(required_matches) / len(required) * 60 if required else 0
+        unique_score = len(unique_matches) / len(unique_ids) * 30 if unique_ids else 0
+        optional_score = len(optional_matches) / len(optional) * 10 if optional else 0
+        
+        total_score = required_score + unique_score + optional_score
+        
+        # Check for missing required columns
+        missing_required = required - columns
+        
+        details = {
+            'required_columns': list(signature['required']),
+            'found_required': list(required_matches),
+            'missing_required': list(missing_required),
+            'optional_found': list(optional_matches),
+            'total_columns_in_file': len(df.columns),
+            'matched_columns': len(all_matches),
+            'description': signature['description']
+        }
+        
+        if total_score > best_score:
+            best_score = total_score
+            best_match = file_type
+            best_details = details
+    
+    # If score is too low, mark as unknown
+    if best_score < 30:
+        best_match = 'unknown'
+        best_details = {
+            'error': 'Could not determine file type',
+            'columns_found': list(df.columns)[:10],  # Show first 10 columns
+            'suggestion': 'Please check if this is the correct file format'
+        }
+    
+    return best_match, round(best_score, 1), best_details
+
+
+def validate_file_for_type(df, expected_type):
+    """
+    Validate if a file matches the expected type.
+    
+    Returns:
+        dict: {
+            'is_valid': bool,
+            'detected_type': str,
+            'confidence': float,
+            'is_correct_type': bool,
+            'errors': list,
+            'warnings': list,
+            'details': dict
+        }
+    """
+    result = {
+        'is_valid': False,
+        'detected_type': 'unknown',
+        'confidence': 0,
+        'is_correct_type': False,
+        'errors': [],
+        'warnings': [],
+        'details': {}
+    }
+    
+    if df is None:
+        result['errors'].append('No file uploaded or file is empty')
+        return result
+    
+    try:
+        # Detect what type of file this actually is
+        detected_type, confidence, details = detect_file_type(df)
+        
+        result['detected_type'] = detected_type
+        result['confidence'] = confidence
+        result['details'] = details
+        
+        # Check if it matches expected type
+        if detected_type == expected_type:
+            result['is_correct_type'] = True
+            
+            # Check for missing required columns
+            if details.get('missing_required'):
+                result['errors'].append(
+                    f"Missing required columns: {details['missing_required']}"
+                )
+            else:
+                result['is_valid'] = True
+                
+            # Add warnings for missing optional columns
+            signature = FILE_SIGNATURES[expected_type]
+            optional_cols = set([col.lower() for col in signature['optional']])
+            file_cols = set([col.lower().strip() for col in df.columns])
+            missing_optional = optional_cols - file_cols
+            
+            if missing_optional:
+                result['warnings'].append(
+                    f"Missing optional columns (will use defaults): {list(missing_optional)}"
+                )
+        
+        elif detected_type == 'unknown':
+            result['errors'].append(
+                f"Cannot identify file type. Expected: {expected_type.upper()}"
+            )
+            result['errors'].append(
+                f"Required columns for {expected_type}: {FILE_SIGNATURES[expected_type]['required']}"
+            )
+        
+        else:
+            # Wrong file type detected
+            result['errors'].append(
+                f"Wrong file type! This looks like a {detected_type.upper()} file, "
+                f"but you uploaded it as {expected_type.upper()}"
+            )
+            result['warnings'].append(
+                f"Detected columns suggest this is: {details.get('description', detected_type)}"
+            )
+        
+        # Additional data quality checks
+        if result['is_valid']:
+            # Check for empty dataframe
+            if len(df) == 0:
+                result['errors'].append('File contains no data rows')
+                result['is_valid'] = False
+            
+            # Check for mostly empty columns
+            empty_cols = [col for col in df.columns if df[col].isna().sum() / len(df) > 0.9]
+            if empty_cols:
+                result['warnings'].append(
+                    f"Columns mostly empty (>90% null): {empty_cols[:5]}"
+                )
+        
+    except Exception as e:
+        result['errors'].append(f"Error reading file: {str(e)}")
+    
+    return result
+
+
+def render_validation_result(validation_result, file_type):
+    """Render validation result with appropriate styling."""
+    
+    if validation_result['is_valid']:
+        st.success(f"✅ Valid {file_type.upper()} file detected!")
+        
+        # Show details
+        details = validation_result['details']
+        st.markdown(f"""
+        <div style="background: #d4edda; padding: 0.5rem; border-radius: 5px; font-size: 0.8rem; margin-top: 0.3rem;">
+            <strong>Columns found:</strong> {len(details.get('found_required', []))} required, {len(details.get('optional_found', []))} optional<br>
+            <strong>Total rows:</strong> Will be shown after processing
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Show warnings if any
+        for warning in validation_result['warnings']:
+            st.warning(f"⚠️ {warning}", icon="⚠️")
+    
+    elif validation_result['is_correct_type'] and not validation_result['is_valid']:
+        # Right type but missing columns
+        st.error(f"❌ {file_type.upper()} file has issues")
+        for error in validation_result['errors']:
+            st.error(f"  • {error}")
+        for warning in validation_result['warnings']:
+            st.warning(f"  • {warning}")
+    
+    else:
+        # Wrong file type
+        detected = validation_result['detected_type']
+        if detected != 'unknown':
+            st.error(f"🚫 Wrong file! Detected as: **{detected.upper()}**")
+            st.markdown(f"""
+            <div style="background: #f8d7da; padding: 0.5rem; border-radius: 5px; font-size: 0.8rem;">
+                <strong>Expected:</strong> {file_type.upper()} file<br>
+                <strong>Got:</strong> {detected.upper()} file<br>
+                <strong>Tip:</strong> Please upload this file to the correct uploader
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.error(f"❓ Unrecognized file format")
+            for error in validation_result['errors']:
+                st.markdown(f"<small>• {error}</small>", unsafe_allow_html=True)
+
+
+def read_and_validate_upload(uploaded_file, expected_type):
+    """
+    Read uploaded file and validate it.
+    
+    Returns:
+        tuple: (dataframe or None, validation_result)
+    """
+    if uploaded_file is None:
+        return None, None
+    
+    try:
+        df = pd.read_csv(uploaded_file)
+        validation = validate_file_for_type(df, expected_type)
+        return df, validation
+    except Exception as e:
+        return None, {
+            'is_valid': False,
+            'detected_type': 'unknown',
+            'confidence': 0,
+            'is_correct_type': False,
+            'errors': [f"Error reading CSV: {str(e)}"],
+            'warnings': [],
+            'details': {}
+        }
+
 
 # =============================================================================
 # LOGO AND STYLES
@@ -182,6 +454,24 @@ st.markdown("""
     .upload-success {
         background: #d4edda; border: 2px solid #28a745; border-radius: 10px;
         padding: 0.5rem 1rem; margin: 0.3rem 0;
+    }
+    .file-status-valid {
+        background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+        border-left: 4px solid #28a745;
+        padding: 0.5rem; border-radius: 5px; margin: 0.3rem 0;
+        font-size: 0.8rem;
+    }
+    .file-status-invalid {
+        background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+        border-left: 4px solid #dc3545;
+        padding: 0.5rem; border-radius: 5px; margin: 0.3rem 0;
+        font-size: 0.8rem;
+    }
+    .file-status-warning {
+        background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
+        border-left: 4px solid #ffc107;
+        padding: 0.5rem; border-radius: 5px; margin: 0.3rem 0;
+        font-size: 0.8rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -921,6 +1211,26 @@ if 'cleaning_stats' not in st.session_state:
 if 'data_source' not in st.session_state:
     st.session_state.data_source = 'generate'
 
+# Validation states for each file
+if 'validation_products' not in st.session_state:
+    st.session_state.validation_products = None
+if 'validation_stores' not in st.session_state:
+    st.session_state.validation_stores = None
+if 'validation_sales' not in st.session_state:
+    st.session_state.validation_sales = None
+if 'validation_inventory' not in st.session_state:
+    st.session_state.validation_inventory = None
+
+# Uploaded dataframes
+if 'uploaded_products' not in st.session_state:
+    st.session_state.uploaded_products = None
+if 'uploaded_stores' not in st.session_state:
+    st.session_state.uploaded_stores = None
+if 'uploaded_sales' not in st.session_state:
+    st.session_state.uploaded_sales = None
+if 'uploaded_inventory' not in st.session_state:
+    st.session_state.uploaded_inventory = None
+
 
 # =============================================================================
 # SIDEBAR
@@ -1003,124 +1313,274 @@ if "Generate" in data_source_option:
         st.sidebar.success("✅ Data cleaned & ready!")
 
 else:
-    # UPLOAD YOUR OWN DATA
+    # UPLOAD YOUR OWN DATA - Enhanced with immediate validation
     st.session_state.data_source = 'upload'
     
-    st.sidebar.markdown("#### Upload CSV Files")
-    st.sidebar.markdown("<small>Upload all 4 required files:</small>", unsafe_allow_html=True)
+    st.sidebar.markdown("#### 📤 Upload CSV Files")
+    st.sidebar.markdown("<small>Files are validated immediately on upload</small>", unsafe_allow_html=True)
     
-    # File uploaders
-    uploaded_products = st.sidebar.file_uploader(
+    # =========================================================================
+    # PRODUCTS UPLOAD
+    # =========================================================================
+    st.sidebar.markdown("---")
+    uploaded_products_file = st.sidebar.file_uploader(
         "📦 Products CSV",
         type=['csv'],
-        key='upload_products',
+        key='upload_products_file',
         help="Required: product_id, category, base_price_aed"
     )
     
-    uploaded_stores = st.sidebar.file_uploader(
+    if uploaded_products_file is not None:
+        # Read and validate immediately
+        df, validation = read_and_validate_upload(uploaded_products_file, 'products')
+        st.session_state.uploaded_products = df
+        st.session_state.validation_products = validation
+        
+        if validation:
+            if validation['is_valid']:
+                st.sidebar.markdown(f"""
+                <div class="file-status-valid">
+                    ✅ <strong>Products:</strong> Valid ({len(df):,} rows)<br>
+                    <small>Found: {', '.join(validation['details'].get('found_required', []))}</small>
+                </div>
+                """, unsafe_allow_html=True)
+            elif validation['is_correct_type']:
+                st.sidebar.markdown(f"""
+                <div class="file-status-warning">
+                    ⚠️ <strong>Products:</strong> Missing columns<br>
+                    <small>{', '.join(validation['details'].get('missing_required', []))}</small>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                detected = validation['detected_type']
+                st.sidebar.markdown(f"""
+                <div class="file-status-invalid">
+                    🚫 <strong>Wrong file!</strong> This is a <strong>{detected.upper()}</strong> file<br>
+                    <small>Please upload a Products file here</small>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # =========================================================================
+    # STORES UPLOAD
+    # =========================================================================
+    uploaded_stores_file = st.sidebar.file_uploader(
         "🏪 Stores CSV",
         type=['csv'],
-        key='upload_stores',
+        key='upload_stores_file',
         help="Required: store_id, city, channel"
     )
     
-    uploaded_sales = st.sidebar.file_uploader(
+    if uploaded_stores_file is not None:
+        df, validation = read_and_validate_upload(uploaded_stores_file, 'stores')
+        st.session_state.uploaded_stores = df
+        st.session_state.validation_stores = validation
+        
+        if validation:
+            if validation['is_valid']:
+                st.sidebar.markdown(f"""
+                <div class="file-status-valid">
+                    ✅ <strong>Stores:</strong> Valid ({len(df):,} rows)<br>
+                    <small>Found: {', '.join(validation['details'].get('found_required', []))}</small>
+                </div>
+                """, unsafe_allow_html=True)
+            elif validation['is_correct_type']:
+                st.sidebar.markdown(f"""
+                <div class="file-status-warning">
+                    ⚠️ <strong>Stores:</strong> Missing columns<br>
+                    <small>{', '.join(validation['details'].get('missing_required', []))}</small>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                detected = validation['detected_type']
+                st.sidebar.markdown(f"""
+                <div class="file-status-invalid">
+                    🚫 <strong>Wrong file!</strong> This is a <strong>{detected.upper()}</strong> file<br>
+                    <small>Please upload a Stores file here</small>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # =========================================================================
+    # SALES UPLOAD
+    # =========================================================================
+    uploaded_sales_file = st.sidebar.file_uploader(
         "💰 Sales CSV",
         type=['csv'],
-        key='upload_sales',
+        key='upload_sales_file',
         help="Required: order_id, order_time, product_id, store_id, qty, selling_price_aed, payment_status"
     )
     
-    uploaded_inventory = st.sidebar.file_uploader(
+    if uploaded_sales_file is not None:
+        df, validation = read_and_validate_upload(uploaded_sales_file, 'sales')
+        st.session_state.uploaded_sales = df
+        st.session_state.validation_sales = validation
+        
+        if validation:
+            if validation['is_valid']:
+                st.sidebar.markdown(f"""
+                <div class="file-status-valid">
+                    ✅ <strong>Sales:</strong> Valid ({len(df):,} rows)<br>
+                    <small>Found: order_id, order_time, qty, +{len(validation['details'].get('found_required', []))-3} more</small>
+                </div>
+                """, unsafe_allow_html=True)
+            elif validation['is_correct_type']:
+                st.sidebar.markdown(f"""
+                <div class="file-status-warning">
+                    ⚠️ <strong>Sales:</strong> Missing columns<br>
+                    <small>{', '.join(validation['details'].get('missing_required', []))}</small>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                detected = validation['detected_type']
+                st.sidebar.markdown(f"""
+                <div class="file-status-invalid">
+                    🚫 <strong>Wrong file!</strong> This is a <strong>{detected.upper()}</strong> file<br>
+                    <small>Please upload a Sales file here</small>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # =========================================================================
+    # INVENTORY UPLOAD
+    # =========================================================================
+    uploaded_inventory_file = st.sidebar.file_uploader(
         "📊 Inventory CSV",
         type=['csv'],
-        key='upload_inventory',
+        key='upload_inventory_file',
         help="Required: snapshot_date, product_id, store_id, stock_on_hand"
     )
     
-    # Check upload status
-    all_uploaded = all([uploaded_products, uploaded_stores, uploaded_sales, uploaded_inventory])
-    
-    if all_uploaded:
-        st.sidebar.success("✅ All files uploaded!")
+    if uploaded_inventory_file is not None:
+        df, validation = read_and_validate_upload(uploaded_inventory_file, 'inventory')
+        st.session_state.uploaded_inventory = df
+        st.session_state.validation_inventory = validation
         
-        if st.sidebar.button("🔄 Process & Clean Data", use_container_width=True):
+        if validation:
+            if validation['is_valid']:
+                st.sidebar.markdown(f"""
+                <div class="file-status-valid">
+                    ✅ <strong>Inventory:</strong> Valid ({len(df):,} rows)<br>
+                    <small>Found: {', '.join(validation['details'].get('found_required', []))}</small>
+                </div>
+                """, unsafe_allow_html=True)
+            elif validation['is_correct_type']:
+                st.sidebar.markdown(f"""
+                <div class="file-status-warning">
+                    ⚠️ <strong>Inventory:</strong> Missing columns<br>
+                    <small>{', '.join(validation['details'].get('missing_required', []))}</small>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                detected = validation['detected_type']
+                st.sidebar.markdown(f"""
+                <div class="file-status-invalid">
+                    🚫 <strong>Wrong file!</strong> This is a <strong>{detected.upper()}</strong> file<br>
+                    <small>Please upload an Inventory file here</small>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # =========================================================================
+    # CHECK ALL FILES VALID AND PROCESS
+    # =========================================================================
+    st.sidebar.markdown("---")
+    
+    # Check validation status
+    all_valid = (
+        st.session_state.validation_products is not None and 
+        st.session_state.validation_products.get('is_valid', False) and
+        st.session_state.validation_stores is not None and 
+        st.session_state.validation_stores.get('is_valid', False) and
+        st.session_state.validation_sales is not None and 
+        st.session_state.validation_sales.get('is_valid', False) and
+        st.session_state.validation_inventory is not None and 
+        st.session_state.validation_inventory.get('is_valid', False)
+    )
+    
+    # Check if any wrong file type was detected
+    wrong_files = []
+    for file_type, validation_key in [
+        ('Products', 'validation_products'),
+        ('Stores', 'validation_stores'),
+        ('Sales', 'validation_sales'),
+        ('Inventory', 'validation_inventory')
+    ]:
+        val = getattr(st.session_state, validation_key, None)
+        if val and not val.get('is_correct_type', True) and val.get('detected_type', 'unknown') != 'unknown':
+            wrong_files.append(f"{file_type} → detected as {val['detected_type'].upper()}")
+    
+    if wrong_files:
+        st.sidebar.error("🚫 File mismatch detected!")
+        for wf in wrong_files:
+            st.sidebar.markdown(f"<small>• {wf}</small>", unsafe_allow_html=True)
+    
+    if all_valid:
+        st.sidebar.success("✅ All files validated!")
+        
+        if st.sidebar.button("🔄 Process & Clean Data", use_container_width=True, type="primary"):
             with st.spinner("Processing uploaded data..."):
                 try:
-                    # Read CSVs
-                    products_df = pd.read_csv(uploaded_products)
-                    stores_df = pd.read_csv(uploaded_stores)
-                    sales_df = pd.read_csv(uploaded_sales)
-                    inventory_df = pd.read_csv(uploaded_inventory)
+                    products_df = st.session_state.uploaded_products
+                    stores_df = st.session_state.uploaded_stores
+                    sales_df = st.session_state.uploaded_sales
+                    inventory_df = st.session_state.uploaded_inventory
                     
-                    # Validate
-                    errors, warnings = validate_uploaded_data(products_df, stores_df, sales_df, inventory_df)
+                    # Add default columns
+                    products_df = add_default_columns(products_df, 'products')
+                    stores_df = add_default_columns(stores_df, 'stores')
+                    sales_df = add_default_columns(sales_df, 'sales')
+                    inventory_df = add_default_columns(inventory_df, 'inventory')
                     
-                    if errors:
-                        for err in errors:
-                            st.sidebar.error(err)
-                    else:
-                        # Show warnings
-                        for warn in warnings:
-                            st.sidebar.warning(warn)
-                        
-                        # Add default columns
-                        products_df = add_default_columns(products_df, 'products')
-                        stores_df = add_default_columns(stores_df, 'stores')
-                        sales_df = add_default_columns(sales_df, 'sales')
-                        inventory_df = add_default_columns(inventory_df, 'inventory')
-                        
-                        # Store original counts
-                        orig = {
-                            'products': len(products_df),
-                            'stores': len(stores_df),
-                            'sales': len(sales_df),
-                            'inventory': len(inventory_df)
-                        }
-                        
-                        # Clean data
-                        cleaner = DataCleaner()
-                        cleaned = cleaner.clean_all(
-                            products_df, stores_df, sales_df, inventory_df,
-                            'data/cleaned'
-                        )
-                        
-                        st.session_state.data = cleaned
-                        
-                        cc = {}
-                        for k, v in cleaned.items():
-                            if isinstance(v, pd.DataFrame) and k != 'issues':
-                                cc[k] = len(v)
-                        
-                        st.session_state.cleaning_stats = {
-                            'original': orig,
-                            'cleaned': cc,
-                            'removed': {k: orig.get(k, 0) - cc.get(k, 0) for k in cc},
-                            'total_issues': len(cleaned['issues']),
-                            'issues_summary': cleaned['issues']['issue_type'].value_counts().to_dict() if len(cleaned['issues']) > 0 else {}
-                        }
-                        st.session_state.data_loaded = True
-                        st.session_state.raw_data_generated = False
-                        
-                        st.sidebar.success("✅ Data processed successfully!")
-                        st.rerun()
-                        
+                    # Store original counts
+                    orig = {
+                        'products': len(products_df),
+                        'stores': len(stores_df),
+                        'sales': len(sales_df),
+                        'inventory': len(inventory_df)
+                    }
+                    
+                    # Clean data
+                    cleaner = DataCleaner()
+                    cleaned = cleaner.clean_all(
+                        products_df, stores_df, sales_df, inventory_df,
+                        'data/cleaned'
+                    )
+                    
+                    st.session_state.data = cleaned
+                    
+                    cc = {}
+                    for k, v in cleaned.items():
+                        if isinstance(v, pd.DataFrame) and k != 'issues':
+                            cc[k] = len(v)
+                    
+                    st.session_state.cleaning_stats = {
+                        'original': orig,
+                        'cleaned': cc,
+                        'removed': {k: orig.get(k, 0) - cc.get(k, 0) for k in cc},
+                        'total_issues': len(cleaned['issues']),
+                        'issues_summary': cleaned['issues']['issue_type'].value_counts().to_dict() if len(cleaned['issues']) > 0 else {}
+                    }
+                    st.session_state.data_loaded = True
+                    st.session_state.raw_data_generated = False
+                    
+                    st.sidebar.success("✅ Data processed successfully!")
+                    st.rerun()
+                    
                 except Exception as e:
                     st.sidebar.error(f"Error processing files: {str(e)}")
     else:
-        # Show which files are missing
+        # Show which files are missing or invalid
         missing = []
-        if not uploaded_products:
+        if not st.session_state.validation_products or not st.session_state.validation_products.get('is_valid'):
             missing.append("Products")
-        if not uploaded_stores:
+        if not st.session_state.validation_stores or not st.session_state.validation_stores.get('is_valid'):
             missing.append("Stores")
-        if not uploaded_sales:
+        if not st.session_state.validation_sales or not st.session_state.validation_sales.get('is_valid'):
             missing.append("Sales")
-        if not uploaded_inventory:
+        if not st.session_state.validation_inventory or not st.session_state.validation_inventory.get('is_valid'):
             missing.append("Inventory")
         
         if missing:
-            st.sidebar.info(f"📋 Still need: {', '.join(missing)}")
+            st.sidebar.info(f"📋 Still need valid: {', '.join(missing)}")
+        
+        st.sidebar.button("🔄 Process & Clean Data", use_container_width=True, disabled=True)
 
 
 # =============================================================================
@@ -1211,8 +1671,71 @@ if not st.session_state.data_loaded:
                 cols[3].metric("Inventory", f"{meta.get('inventory_records', 0):,}")
     
     elif st.session_state.data_source == 'upload':
-        # Upload instructions
-        st.info("👈 Upload your CSV files in the sidebar to get started")
+        # Upload instructions with enhanced validation info
+        st.info("👈 Upload your CSV files in the sidebar. Each file is validated immediately!")
+        
+        # Show validation summary if any files uploaded
+        any_uploaded = any([
+            st.session_state.validation_products,
+            st.session_state.validation_stores,
+            st.session_state.validation_sales,
+            st.session_state.validation_inventory
+        ])
+        
+        if any_uploaded:
+            st.markdown("### 📋 Upload Status")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                val = st.session_state.validation_products
+                if val:
+                    if val['is_valid']:
+                        st.success(f"✅ Products\n{len(st.session_state.uploaded_products):,} rows")
+                    elif val['is_correct_type']:
+                        st.warning(f"⚠️ Products\nMissing columns")
+                    else:
+                        st.error(f"🚫 Wrong file\nGot: {val['detected_type']}")
+                else:
+                    st.info("📦 Products\nNot uploaded")
+            
+            with col2:
+                val = st.session_state.validation_stores
+                if val:
+                    if val['is_valid']:
+                        st.success(f"✅ Stores\n{len(st.session_state.uploaded_stores):,} rows")
+                    elif val['is_correct_type']:
+                        st.warning(f"⚠️ Stores\nMissing columns")
+                    else:
+                        st.error(f"🚫 Wrong file\nGot: {val['detected_type']}")
+                else:
+                    st.info("🏪 Stores\nNot uploaded")
+            
+            with col3:
+                val = st.session_state.validation_sales
+                if val:
+                    if val['is_valid']:
+                        st.success(f"✅ Sales\n{len(st.session_state.uploaded_sales):,} rows")
+                    elif val['is_correct_type']:
+                        st.warning(f"⚠️ Sales\nMissing columns")
+                    else:
+                        st.error(f"🚫 Wrong file\nGot: {val['detected_type']}")
+                else:
+                    st.info("💰 Sales\nNot uploaded")
+            
+            with col4:
+                val = st.session_state.validation_inventory
+                if val:
+                    if val['is_valid']:
+                        st.success(f"✅ Inventory\n{len(st.session_state.uploaded_inventory):,} rows")
+                    elif val['is_correct_type']:
+                        st.warning(f"⚠️ Inventory\nMissing columns")
+                    else:
+                        st.error(f"🚫 Wrong file\nGot: {val['detected_type']}")
+                else:
+                    st.info("📊 Inventory\nNot uploaded")
+            
+            st.markdown("---")
         
         st.markdown("### 📋 Required Data Format")
         
@@ -1388,12 +1911,12 @@ if not st.session_state.data_loaded:
             st.markdown("""
             <div style="background: linear-gradient(135deg, #1E3A5F 0%, #2E5A8F 100%); 
                         padding: 1.5rem; border-radius: 10px; color: white;">
-                <h4 style="color: #00D4AA;">📤 Flexible Data Input</h4>
+                <h4 style="color: #00D4AA;">📤 Smart File Detection</h4>
                 <ul style="font-size: 0.85rem;">
-                    <li>Generate Sample Data</li>
-                    <li>Upload Your Own CSVs</li>
+                    <li>Instant File Validation</li>
+                    <li>Wrong File Detection</li>
+                    <li>Missing Column Alerts</li>
                     <li>Auto Data Cleaning</li>
-                    <li>Quality Reports</li>
                 </ul>
             </div>
             """, unsafe_allow_html=True)
@@ -1923,6 +2446,6 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; padding: 1rem; color: #888;">
-    <strong>UAE PROMO PULSE</strong> v2.0 | Retail Analytics Dashboard | 12 Chart Types | Upload or Generate Data
+    <strong>UAE PROMO PULSE</strong> v2.1 | Retail Analytics Dashboard | Smart File Detection | 12 Chart Types
 </div>
 """, unsafe_allow_html=True)
