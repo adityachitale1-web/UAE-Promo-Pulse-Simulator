@@ -10,7 +10,7 @@ Features:
 - 15 KPIs with full visualization
 - 12 Chart Types
 - What-If Simulation
-- Download cleaned data and issues log
+- Download cleaned data, issues log, and ALL DATA as ZIP
 """
 
 import streamlit as st
@@ -21,6 +21,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import os
+import io
+import zipfile
 
 from data_generator import generate_all_data
 from cleaner import DataCleaner
@@ -223,6 +225,99 @@ def safe_get_filter(filters, key, default=None):
     if val == 'All' or val is None:
         return None
     return val
+
+
+def create_zip_download(data, sim_results, kpis, daily):
+    """Create a ZIP file containing all data for download"""
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Add cleaned data files
+        if 'products' in data and data['products'] is not None:
+            csv_buffer = io.StringIO()
+            data['products'].to_csv(csv_buffer, index=False)
+            zip_file.writestr('cleaned_products.csv', csv_buffer.getvalue())
+        
+        if 'stores' in data and data['stores'] is not None:
+            csv_buffer = io.StringIO()
+            data['stores'].to_csv(csv_buffer, index=False)
+            zip_file.writestr('cleaned_stores.csv', csv_buffer.getvalue())
+        
+        if 'sales' in data and data['sales'] is not None:
+            csv_buffer = io.StringIO()
+            data['sales'].to_csv(csv_buffer, index=False)
+            zip_file.writestr('cleaned_sales.csv', csv_buffer.getvalue())
+        
+        if 'inventory' in data and data['inventory'] is not None:
+            csv_buffer = io.StringIO()
+            data['inventory'].to_csv(csv_buffer, index=False)
+            zip_file.writestr('cleaned_inventory.csv', csv_buffer.getvalue())
+        
+        # Add issues log
+        if 'issues' in data and data['issues'] is not None and len(data['issues']) > 0:
+            csv_buffer = io.StringIO()
+            data['issues'].to_csv(csv_buffer, index=False)
+            zip_file.writestr('issues_log.csv', csv_buffer.getvalue())
+        
+        # Add KPIs summary
+        if kpis:
+            csv_buffer = io.StringIO()
+            pd.DataFrame([kpis]).to_csv(csv_buffer, index=False)
+            zip_file.writestr('kpis_summary.csv', csv_buffer.getvalue())
+        
+        # Add daily data
+        if daily is not None and len(daily) > 0:
+            csv_buffer = io.StringIO()
+            daily.to_csv(csv_buffer, index=False)
+            zip_file.writestr('daily_metrics.csv', csv_buffer.getvalue())
+        
+        # Add simulation results
+        if sim_results and sim_results.get('results'):
+            csv_buffer = io.StringIO()
+            pd.DataFrame([sim_results['results']]).to_csv(csv_buffer, index=False)
+            zip_file.writestr('simulation_results.csv', csv_buffer.getvalue())
+        
+        # Add top risk items
+        if sim_results and sim_results.get('top_risk_items') is not None:
+            top_risk = sim_results.get('top_risk_items')
+            if len(top_risk) > 0:
+                csv_buffer = io.StringIO()
+                top_risk.to_csv(csv_buffer, index=False)
+                zip_file.writestr('top_risk_items.csv', csv_buffer.getvalue())
+        
+        # Add simulation detail
+        if sim_results and sim_results.get('simulation_detail') is not None:
+            sim_detail = sim_results.get('simulation_detail')
+            if len(sim_detail) > 0:
+                csv_buffer = io.StringIO()
+                sim_detail.to_csv(csv_buffer, index=False)
+                zip_file.writestr('simulation_detail.csv', csv_buffer.getvalue())
+        
+        # Add README file
+        readme_content = f"""UAE Promo Pulse - Data Export
+==============================
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+Files Included:
+---------------
+1. cleaned_products.csv - Cleaned product master data
+2. cleaned_stores.csv - Cleaned store master data
+3. cleaned_sales.csv - Cleaned sales transactions
+4. cleaned_inventory.csv - Cleaned inventory snapshots
+5. issues_log.csv - Data quality issues detected during cleaning
+6. kpis_summary.csv - Key Performance Indicators
+7. daily_metrics.csv - Daily aggregated metrics
+8. simulation_results.csv - What-If simulation results
+9. top_risk_items.csv - Top stockout risk items
+10. simulation_detail.csv - Detailed simulation data
+
+Dashboard: UAE Promo Pulse
+Version: 2.0
+"""
+        zip_file.writestr('README.txt', readme_content)
+    
+    zip_buffer.seek(0)
+    return zip_buffer
 
 
 def validate_uploaded_data(products_df, stores_df, sales_df, inventory_df):
@@ -1713,6 +1808,7 @@ else:
     st.markdown("---")
     section_header("Export Data", "📥")
     
+    # First row - Individual downloads
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -1754,6 +1850,71 @@ else:
                 "text/csv",
                 use_container_width=True
             )
+    
+    # Second row - More individual downloads and ALL DATA ZIP
+    st.markdown("")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.download_button(
+            "📄 Products",
+            data['products'].to_csv(index=False),
+            "cleaned_products.csv",
+            "text/csv",
+            use_container_width=True
+        )
+    
+    with col2:
+        st.download_button(
+            "📄 Stores",
+            data['stores'].to_csv(index=False),
+            "cleaned_stores.csv",
+            "text/csv",
+            use_container_width=True
+        )
+    
+    with col3:
+        st.download_button(
+            "📄 Inventory",
+            data['inventory'].to_csv(index=False),
+            "cleaned_inventory.csv",
+            "text/csv",
+            use_container_width=True
+        )
+    
+    with col4:
+        if daily is not None and len(daily) > 0:
+            st.download_button(
+                "📄 Daily Metrics",
+                daily.to_csv(index=False),
+                "daily_metrics.csv",
+                "text/csv",
+                use_container_width=True
+            )
+    
+    # Download ALL Data as ZIP
+    st.markdown("")
+    st.markdown("### 📦 Download All Data")
+    
+    zip_buffer = create_zip_download(data, sim_results, kpis, daily)
+    
+    st.download_button(
+        label="📦 Download All Data (ZIP)",
+        data=zip_buffer,
+        file_name=f"uae_promo_pulse_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+        mime="application/zip",
+        use_container_width=True,
+        type="primary"
+    )
+    
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #1E3A5F 0%, #2E5A8F 100%); 
+                padding: 1rem; border-radius: 8px; margin-top: 0.5rem; color: #ffffff;">
+        <strong style="color: #00D4AA;">📦 ZIP Contents:</strong> 
+        <span style="color: #e0e0e0;">Products, Stores, Sales, Inventory, Issues Log, KPIs Summary, 
+        Daily Metrics, Simulation Results, Risk Items, and README file.</span>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # =============================================================================
